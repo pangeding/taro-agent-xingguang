@@ -20,37 +20,30 @@ project/
 - **backend/agent**: AI 代理核心，负责塔罗牌解读、对话交互、智能推荐
 - **backend/api**: RESTful API 接口，提供用户管理、占卜记录、牌阵查询等服务
 - **backend/db**: 数据库模型、迁移脚本、数据访问层
-- **frontend**: 用户界面，支持网页端和移动端
+- **frontend**: 用户界面，支持网页端
 - **data**: 78 张阿尔卡纳塔罗牌的详细知识库，包括牌义、象征、元素等
 
 ### 3. 技术栈
 
 **AI 技术栈：**
-- 大语言模型（LLM）集成
-- 自然语言处理（NLP）
-- 情感分析
-- 个性化推荐算法
+- langgraph
+- deepseek api
 
 **后端技术栈：**
-- 编程语言：Python 3.9+
-- Web 框架：FastAPI / Flask
-- 数据库：PostgreSQL / MySQL
+- 编程语言：Python 3.10+
+- Web 框架：FastAPI
+- 数据库：MySQL
 - 缓存：Redis
-- ORM：SQLAlchemy
+- ORM：peewee
 - 认证：JWT
 
 **前端技术栈：**
-- 框架：React / Vue.js / Taro（跨平台）
-- 状态管理：Redux / Pinia
-- UI 组件：Ant Design / Element Plus
-- 构建工具：Vite / Webpack
-- 跨平台：Taro（支持小程序、H5、App）
+- 框架：React  taliwind
+- Next.js
 
-**部署与运维：**
-- 容器化：Docker
-- 编排：Kubernetes
-- CI/CD：GitHub Actions / GitLab CI
-- 监控：Prometheus + Grafana
+管理
+uv管理后端
+pnpm管理前端
 
 ### 4. Agent 功能
 
@@ -183,10 +176,9 @@ CREATE TABLE feedbacks (
 ### 7. 快速开始
 
 **环境要求：**
-- Python 3.9+
+- Python 3.10+
 - Node.js 16+
-- MySQL 8.0+ / PostgreSQL 13+
-- Redis 6.0+
+- MySQL 5.6+
 
 **安装步骤：**
 
@@ -197,21 +189,13 @@ cd taro_agent
 
 # 后端安装
 cd backend
-pip install -r requirements.txt
+uv 。。。
 cp .env.example .env
-# 配置环境变量
-python manage.py migrate
-python manage.py runserver
+
 
 # 前端安装
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
-### 8. 注意事项
-
-1. **数据安全**：用户隐私数据需加密存储
-2. **合规性**：明确标注娱乐性质，避免迷信宣传
-3. **性能**：高频抽牌场景需考虑缓存策略
-4. **可扩展**：预留多 AI 模型切换能力
