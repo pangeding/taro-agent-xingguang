@@ -1,0 +1,25 @@
+[tool.uv]
+
+[project]
+name = "taro-agent"
+version = "0.1.0"
+description = "星光塔罗AI助手 - 基于传统塔罗牌智慧与现代人工智能技术的个性化占卜体验"
+requires-python = "==3.12.*"
+dependencies = [
+    "fastapi==0.135.3",
+    "uvicorn==0.42.0",
+    "pydantic==2.12.5",
+    "agno==2.5.2",
+    "python-dotenv==1.2.2",
+    "peewee==3.10.0"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["backend"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]

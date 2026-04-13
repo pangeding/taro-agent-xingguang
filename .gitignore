@@ -1,0 +1,16 @@
+.claude/
+.venv/
+
+.env
+
+node_modules/
+.next/
+
+__pycache__/
+
+*.pyc 
+
+*.db
+*.db-shm
+*.db-wal
+
