@@ -15,7 +15,7 @@ def get_client() -> httpx.AsyncClient:
         _client = httpx.AsyncClient(
             timeout=30.0,
             headers={
-                "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
+                "Authorization": f"Bearer {settings.DASHSCOPE_API_KEY}",
                 "Content-Type": "application/json",
             },
         )
@@ -46,8 +46,8 @@ async def interpret_card(
     prompt = build_prompt(card, is_reversed, question, position, spread_type)
 
     try:
-        # 调用DeepSeek API
-        response = await call_deepseek_api(prompt)
+        # 调用DashScope API
+        response = await call_dashscope_api(prompt)
         return response.strip()
     except Exception as e:
         # 如果API调用失败，返回基础解读
@@ -106,16 +106,17 @@ def build_prompt(
     return prompt.strip()
 
 
-async def call_deepseek_api(prompt: str) -> str:
-    """调用DeepSeek API"""
-    if not settings.DEEPSEEK_API_KEY:
-        raise ValueError("DeepSeek API密钥未配置")
+async def call_dashscope_api(prompt: str) -> str:
+    """调用DashScope API"""
+    if not settings.DASHSCOPE_API_KEY:
+        raise ValueError("DashScope API密钥未配置")
 
     client = get_client()
-    url = f"{settings.DEEPSEEK_API_BASE}/chat/completions"
+    # 构建完整的API endpoint
+    url = f"{settings.DASHSCOPE_BASE_URL}/chat/completions"
 
     payload = {
-        "model": settings.DEEPSEEK_MODEL,
+        "model": settings.DASHSCOPE_MODEL,
         "messages": [
             {
                 "role": "system",

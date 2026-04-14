@@ -31,7 +31,7 @@ class ReadingResponse(BaseModel):
 
 
 @router.post("/", response_model=ReadingResponse)
-async def create_reading(request: ReadingRequest, background_tasks: BackgroundTasks):
+async def create_reading(request: ReadingRequest):
     """创建新的占卜"""
     # 生成或使用会话ID
     session_id = request.session_id or str(uuid.uuid4())
@@ -54,7 +54,7 @@ async def create_reading(request: ReadingRequest, background_tasks: BackgroundTa
         # 默认单张
         cards = await draw_cards(1)
 
-    # 保存抽牌结果（先保存基础信息，AI解读在后台进行）
+    # 保存抽牌结果（先保存基础信息）
     reading_cards = []
     for i, card_data in enumerate(cards):
         reading_card = ReadingCard.create(
@@ -62,12 +62,15 @@ async def create_reading(request: ReadingRequest, background_tasks: BackgroundTa
             card=TarotCard.get(TarotCard.id == card_data["id"]),
             position=i,
             is_reversed=card_data["is_reversed"],
-            interpretation="",  # 初始为空，后台任务会填充
+            interpretation="",  # 初始为空
         )
         reading_cards.append(reading_card)
 
-    # 后台任务：AI解读
-    background_tasks.add_task(generate_interpretations, reading.id)
+    # 同步等待AI解读完成
+    await generate_interpretations(reading.id)
+
+    # 重新获取更新后的数据
+    reading_cards = ReadingCard.select().where(ReadingCard.reading == reading)
 
     # 返回响应
     return ReadingResponse(

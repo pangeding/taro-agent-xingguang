@@ -1,6 +1,10 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
+from dotenv import load_dotenv
 
+import os
+
+load_dotenv()
 
 class Settings(BaseSettings):
     """应用配置"""
@@ -11,15 +15,15 @@ class Settings(BaseSettings):
     VERSION: str = "0.1.0"
 
     # 数据库设置 (使用SQLite简化)
-    DATABASE_URL: str = "sqlite:///./taro.db"
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
 
     # DeepSeek API设置
-    DEEPSEEK_API_KEY: str = ""
-    DEEPSEEK_API_BASE: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL: str = "deepseek-chat"
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY")
+    DASHSCOPE_BASE_URL: str = os.getenv("DASHSCOPE_BASE_URL")
+    DASHSCOPE_MODEL: str = os.getenv("DASHSCOPE_MODEL")
 
     # CORS设置
-    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    BACKEND_CORS_ORIGINS: list[str] = os.getenv("BACKEND_CORS_ORIGINS")
 
     class Config:
         env_file = ".env"

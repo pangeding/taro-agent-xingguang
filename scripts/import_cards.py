@@ -8,8 +8,8 @@ import json
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "backend"))
 
-from app.db.models import TarotCard, create_tables
-from app.db.base import db
+from backend.app.db.models import TarotCard, create_tables
+from backend.app.db.base import db
 
 
 def import_cards():
