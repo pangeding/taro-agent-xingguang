@@ -42,13 +42,13 @@ install-frontend:
 # 初始化数据库
 init-db:
 	@echo "🗄️  初始化数据库..."
-	python scripts/init_db.py
+	cd backend && python scripts/init_db.py
 	@echo "✅ 数据库初始化完成"
 
 # 导入塔罗牌数据
 import-cards:
 	@echo "🃏 导入塔罗牌数据..."
-	python scripts/import_cards.py
+	cd backend && python scripts/import_cards.py
 	@echo "✅ 塔罗牌数据导入完成"
 
 # 启动后端服务器
