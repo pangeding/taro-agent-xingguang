@@ -26,4 +26,19 @@
 ### 3. 架构
 
 1. SQLite 转 PostgreSQL
+2. 【done】重构项目，将 .venv pyprojecy.toml data/ scripts/ 移动到backend目录下面
+3. 【done】将 backend中的requirements.txt 删去
+
+
+### 4. 运维
+1. 
+1. scripts 脚本运行失败
 2. 
+
+### 5. 测试
+1. 测试用例
+
+### 6. 文档
+1. 前端功能是如何实现的
+2. 整体架构
+
