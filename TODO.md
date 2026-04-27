@@ -3,7 +3,7 @@
 1. 添加支付功能 stripe
 2. api service层分离
 3. 多 llm 模型兼容
-4. 用 openai 代替 http 框架
+4. 用 openai 代替 httpx 框架
 5. 流式输出 SSE
 6. 分离硬编码的工具 tool
 7. tool 单牌阵和多牌阵
@@ -11,6 +11,7 @@
 9. 记忆功能 memory
 10. 3张牌逻辑不对
 11. 历史记录功能
+12. 各个功能怎么用一个 router？
 
 ### 2. agent
 1. 转 langgraph
@@ -39,7 +40,6 @@
 6. 【done】将 scripts 里的 import_cards.py 脚本修改
 
 ### 4. 运维
-1. 
 1. 【done】scripts 脚本运行失败
 2. 
 
