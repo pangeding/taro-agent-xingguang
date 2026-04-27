@@ -19,7 +19,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = ["backend"]
+include = ["app"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["backend"]
+packages = ["app"]
