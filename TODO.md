@@ -1,9 +1,9 @@
 ### 1. 后端
 
 1. 添加支付功能 stripe
-2. api service层分离
+2. 【done】api service层分离
 3. 多 llm 模型兼容
-4. 用 openai 代替 httpx 框架
+4. 【not needed】用 openai 代替 httpx 框架
 5. 流式输出 SSE
 6. 分离硬编码的工具 tool
 7. tool 单牌阵和多牌阵
@@ -11,7 +11,8 @@
 9. 记忆功能 memory
 10. 3张牌逻辑不对
 11. 历史记录功能
-12. 各个功能怎么用一个 router？
+12. 【done】各个功能怎么用一个 router？有在 init 里注册
+13. 多语言
 
 ### 2. agent
 1. 转 langgraph
@@ -19,11 +20,12 @@
 3. 添加MCP
 4. 3张牌逻辑不对
 5. 3张牌只有一次请求，整理牌库
+6. 流式输出 
 
 
 ### 2. 前端
 
-1. 流式输出
+1. 流式输出SSE fetch + ReadableStream
 2. 刷新后原有的占卜结果就消失了
 3. ai正在深度提醒的提示应该消失了
 4. 3张牌逻辑不对
@@ -32,7 +34,7 @@
 
 ### 3. 架构
 
-1. SQLite 转 PostgreSQL
+1. SQLite 转 MySQL
 2. 【done】重构项目，将 .venv pyprojecy.toml data/ scripts/ 移动到backend目录下面
 3. 【done】将 backend中的requirements.txt 删去
 4. 【done】将pyproject.toml直接从根目录移动到backend的兼容问题
