@@ -1,9 +1,8 @@
 # LangGraph 迁移 - 实施指南
 
 ## 原则
-- **非侵入式**：只新增文件，不修改已有文件的行为
-- **向后兼容**：旧接口 `interpreter.interpret_card()` 保持不变，新走 LangGraph 提供额外入口
-- **渐进替换**：service 层通过配置开关选择走旧路径还是新路径
+
+**增量更新，旧有不变**：只新增文件，不修改已有文件的逻辑；旧接口保持原样，新能力通过额外入口提供。
 
 ## 目标
 新增 LangGraph 工作流，支持多模型切换，修复三牌阵逻辑。旧 `interpreter.py` 不动。
@@ -21,7 +20,7 @@ openai>=1.0.0
 
 ```
 backend/app/agent/
-├── __init__.py          # 修改: 新增导出 reading_graph
+├── __init__.py          # 新增: 导出 reading_graph（保留原有导出）
 ├── interpreter.py       # 【不动】旧接口保持原样
 ├── config.py            # [新增] LLM 配置
 ├── state.py             # [新增] 工作流状态
@@ -32,10 +31,10 @@ backend/app/agent/
 └── graph.py             # [新增] 工作流图
 
 backend/app/service/
-└── reading_service.py   # 修改: _generate_interpretations 内部走新路径，保留旧调用兼容
+└── reading_service.py   # 新增: _generate_interpretations_langgraph()，旧方法不动
 
 backend/app/model/
-└── request.py           # 修改: 新增可选 model_name 字段
+└── request.py           # 新增: ReadingRequestV2 继承旧 Request，追加可选 model_name 字段
 ```
 
 ## 兼容性保障
@@ -43,8 +42,8 @@ backend/app/model/
 | 旧接口 | 新接口 | 兼容方式 |
 |--------|--------|----------|
 | `interpreter.interpret_card()` | `graph.ainvoke(state)` | `interpreter.py` 不动，任何调用方不受影响 |
-| `reading_service._generate_interpretations()` | 内部切换为 `reading_graph.ainvoke()` | 对 API 层透明，响应结构不变 |
-| `ReadingRequest(question, spread_type)` | `ReadingRequest(question, spread_type, model_name=None)` | `model_name` 可选，默认 None 行为不变 |
+| `reading_service._generate_interpretations()` | `_generate_interpretations_langgraph()` | 新增独立方法，旧方法不动 |
+| `ReadingRequest(question, spread_type)` | `ReadingRequestV2(question, spread_type, model_name=None)` | 新模型独立定义，旧模型不变 |
 
 ## Step 1: 扩展全局配置
 
@@ -305,6 +304,8 @@ def create_reading_graph():
 
 ## Step 9: 修改 agent/__init__.py
 
+在现有导出基础上新增：
+
 ```python
 """
 AI塔罗牌解读模块
@@ -319,14 +320,14 @@ from .graph import create_reading_graph
 reading_graph = create_reading_graph()
 ```
 
-## Step 10: 修改 service/reading_service.py
+## Step 10: 新增 service/reading_service.py 中的 LangGraph 路径
 
-仅修改 `_generate_interpretations()`，改为走 LangGraph。API 响应结构不变：
+新增 `_generate_interpretations_langgraph()` 方法，旧 `_generate_interpretations()` 不动：
 
 ```python
 from ..agent import reading_graph
 
-async def _generate_interpretations(reading_id: int, model_name: str = None):
+async def _generate_interpretations_langgraph(reading_id: int, model_name: str = None):
     reading = Reading.get(Reading.id == reading_id)
     reading_cards = list(ReadingCard.select().where(ReadingCard.reading == reading))
 
@@ -359,12 +360,12 @@ async def _generate_interpretations(reading_id: int, model_name: str = None):
         last_card.save()
 ```
 
-## Step 11: 修改 model/request.py
+## Step 11: 新增 model/request.py 中的新请求模型
 
-仅新增可选字段，不影响已有调用:
+新增 `ReadingRequestV2`，继承或扩展旧模型，不影响已有调用：
 
 ```python
-class ReadingRequest(BaseModel):
+class ReadingRequestV2(BaseModel):
     question: str
     spread_type: str = "single"
     session_id: Optional[str] = None
