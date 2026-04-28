@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .endpoints import readings, cards
+from . import readings, cards
 
 router = APIRouter()
 

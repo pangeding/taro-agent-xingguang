@@ -1,12 +1,9 @@
-from fastapi import APIRouter, HTTPException
-from typing import List
-from ...db.models import TarotCard
-
-router = APIRouter()
+import random
+from typing import Optional
+from ..db.models import TarotCard
 
 
-@router.get("/", response_model=List[dict])
-async def get_all_cards():
+def get_all_cards() -> list[dict]:
     """获取所有塔罗牌"""
     cards = TarotCard.select()
     return [
@@ -23,12 +20,11 @@ async def get_all_cards():
     ]
 
 
-@router.get("/{card_id}", response_model=dict)
-async def get_card(card_id: int):
-    """获取单张塔罗牌详情"""
+def get_card_by_id(card_id: int) -> Optional[dict]:
+    """根据 ID 获取塔罗牌详情"""
     card = TarotCard.get_or_none(TarotCard.id == card_id)
     if not card:
-        raise HTTPException(status_code=404, detail="牌不存在")
+        return None
     return {
         "id": card.id,
         "name": card.name,
@@ -45,21 +41,14 @@ async def get_card(card_id: int):
     }
 
 
-@router.get("/random/", response_model=dict)
-async def get_random_card():
+def get_random_card() -> Optional[dict]:
     """随机抽取一张塔罗牌"""
-    import random
-
-    # 获取所有牌ID
     card_ids = [card.id for card in TarotCard.select(TarotCard.id)]
     if not card_ids:
-        raise HTTPException(status_code=404, detail="暂无塔罗牌数据")
+        return None
 
-    # 随机选择一张牌
     card_id = random.choice(card_ids)
     card = TarotCard.get(TarotCard.id == card_id)
-
-    # 随机决定正逆位
     is_reversed = random.choice([True, False])
 
     return {
