@@ -3,6 +3,8 @@ import uuid
 from typing import Optional
 from ..db.models import Reading, ReadingCard, TarotCard
 from ..agent.interpreter import interpret_card
+from ..agent import reading_graph
+from ..agent.state import ReadingState
 
 
 def _draw_cards(count: int) -> list[dict]:
@@ -127,3 +129,24 @@ def get_reading_by_id(reading_id: int) -> Optional[dict]:
             for rc in reading_cards
         ],
     }
+
+
+async def _generate_interpretations_langgraph(reading_id: int, model_name: str = None):
+    """使用 LangGraph 生成AI解读"""
+    reading = Reading.get(Reading.id == reading_id)
+    reading_cards = list(ReadingCard.select().where(ReadingCard.reading == reading))
+    initial_state = ReadingState(
+        question=reading.question, spread_type=reading.spread_type,
+        session_id=reading.session_id, model_name=model_name,
+        cards_info=[{"id": rc.card.id, "name": rc.card.name,
+                     "is_reversed": rc.is_reversed, "position": rc.position,
+                     "card_obj": rc.card} for rc in reading_cards],
+        interpretations=[], synthesis=None, status="success", error=None)
+    result = await reading_graph.ainvoke(initial_state)
+    for i, interp in enumerate(result["interpretations"]):
+        reading_cards[i].interpretation = interp["interpretation"]
+        reading_cards[i].save()
+    if result.get("synthesis") and reading.spread_type == "three":
+        last_card = reading_cards[-1]
+        last_card.interpretation += f"\n\n---\n**综合解读**: {result['synthesis']}"
+        last_card.save()
