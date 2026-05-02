@@ -4,26 +4,16 @@
 
 **增量更新**：只做追加，不改既有逻辑。
 
+**工作目录**：以 backend 为根目录
+
 ## 任务
 
 - `pyproject.toml` 新增: `langgraph>=0.2.0`, `openai>=1.0.0`
 - 新增 agent 目录下文件: `config.py`, `state.py`, `prompts.py`, `fallback.py`, `llm_client.py`, `nodes.py`, `graph.py`
-- 追加内容到: `core/config.py`, `agent/__init__.py`, `service/reading_service.py`, `model/request.py`
+- 追加内容到: `agent/__init__.py`, `service/reading_service.py`, `model/request.py`
 - `agent/interpreter.py` 不动
 
-## Step 1: core/config.py 追加
-
-读取现有 `core/config.py`，在末尾追加:
-```python
-LLM_PROVIDER: str = "dashscope"
-LLM_API_KEY: str = ""
-LLM_BASE_URL: str = ""
-LLM_MODEL: str = ""
-LLM_TEMPERATURE: float = 0.7
-LLM_MAX_TOKENS: int = 1000
-```
-
-## Step 2: agent/config.py
+## Step 1: agent/config.py
 
 ```python
 from dataclasses import dataclass
@@ -39,14 +29,13 @@ class LLMConfig:
     max_tokens: int = 1000
 
 def get_llm_config(model_name: str = None) -> LLMConfig:
-    api_key = settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
-    base_url = settings.LLM_BASE_URL or settings.DASHSCOPE_BASE_URL
-    model = model_name or settings.LLM_MODEL or settings.DASHSCOPE_MODEL
-    provider = settings.LLM_PROVIDER
-    return LLMConfig(provider, api_key, base_url, model)
+    api_key = settings.DASHSCOPE_API_KEY
+    base_url = settings.DASHSCOPE_BASE_URL
+    model = model_name or settings.DASHSCOPE_MODEL
+    return LLMConfig("dashscope", api_key, base_url, model)
 ```
 
-## Step 3: agent/llm_client.py
+## Step 2: agent/llm_client.py
 
 ```python
 from openai import AsyncOpenAI
@@ -69,7 +58,7 @@ class LLMClient:
         return resp.choices[0].message.content
 ```
 
-## Step 4: agent/prompts.py
+## Step 3: agent/prompts.py
 
 从 `agent/interpreter.py` 读取 `build_prompt()` 函数和 `SYSTEM_PROMPT`，复制为 `build_card_prompt()` 和 `SYSTEM_PROMPT`，并新增 `build_synthesis_prompt()`:
 
@@ -104,7 +93,7 @@ def build_synthesis_prompt(interpretations, question):
     """.strip()
 ```
 
-## Step 5: agent/fallback.py
+## Step 4: agent/fallback.py
 
 从 `agent/interpreter.py` 读取 `get_basic_interpretation()`，复制到 `fallback.py`:
 
@@ -114,7 +103,7 @@ def get_basic_interpretation(card, is_reversed):
     # TODO: 从 interpreter.py:get_basic_interpretation 复制到这里
 ```
 
-## Step 6: agent/state.py
+## Step 5: agent/state.py
 
 ```python
 from typing import TypedDict, Optional, Literal
@@ -139,7 +128,7 @@ class ReadingState(TypedDict):
     error: Optional[str]
 ```
 
-## Step 7: agent/nodes.py
+## Step 6: agent/nodes.py
 
 ```python
 from .state import ReadingState, CardInterpretation
@@ -186,7 +175,7 @@ async def synthesize(state: ReadingState) -> ReadingState:
     return state
 ```
 
-## Step 8: agent/graph.py
+## Step 7: agent/graph.py
 
 ```python
 from langgraph.graph import StateGraph, END
@@ -204,7 +193,7 @@ def create_reading_graph():
     return builder.compile()
 ```
 
-## Step 9: agent/__init__.py
+## Step 8: agent/__init__.py
 
 读取现有 `__init__.py`，末尾追加:
 ```python
@@ -212,7 +201,7 @@ from .graph import create_reading_graph
 reading_graph = create_reading_graph()
 ```
 
-## Step 10: service/reading_service.py 追加
+## Step 9: service/reading_service.py 追加
 
 读取现有 `reading_service.py`，追加:
 ```python
@@ -239,7 +228,7 @@ async def _generate_interpretations_langgraph(reading_id: int, model_name: str =
         last_card.save()
 ```
 
-## Step 11: model/request.py 追加
+## Step 10: model/request.py 追加
 
 读取现有 `request.py`，追加:
 ```python
