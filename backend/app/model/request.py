@@ -8,6 +8,7 @@ class ReadingRequest(BaseModel):
     question: str
     spread_type: str = "single"  # 牌阵类型，默认为单张
     session_id: Optional[str] = None  # 会话ID，可为空
+    model_name: Optional[str] = None  # 模型名称，可选
 
 
 class ReadingRequestV2(BaseModel):

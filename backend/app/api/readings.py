@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from ..service import reading_service
-from ..model.request import ReadingRequest
+from ..model.request import ReadingRequest, ReadingRequestV2
 from ..model.response import ReadingResponse
 
 router = APIRouter()
@@ -13,6 +13,18 @@ async def create_reading(request: ReadingRequest):
         question=request.question,
         spread_type=request.spread_type,
         session_id=request.session_id,
+    )
+    return ReadingResponse(**result)
+
+
+@router.post("/langgraph", response_model=ReadingResponse)
+async def create_reading_langgraph(request: ReadingRequestV2):
+    """创建新的占卜（LangGraph）"""
+    result = await reading_service.create_reading_langgraph(
+        question=request.question,
+        spread_type=request.spread_type,
+        session_id=request.session_id,
+        model_name=request.model_name,
     )
     return ReadingResponse(**result)
 

@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END
-from .state import ReadingState
-from .nodes import interpret_cards, synthesize
+from app.agent.state import ReadingState
+from app.agent.nodes import interpret_cards, synthesize
 
 
 def create_reading_graph():
@@ -12,3 +12,5 @@ def create_reading_graph():
         lambda s: "synthesize" if s["spread_type"] == "three" else END)
     builder.add_edge("synthesize", END)
     return builder.compile()
+
+reading_graph = create_reading_graph()
