@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from ..service import reading_service
 from ..model.request import ReadingRequest, ReadingRequestV2
 from ..model.response import ReadingResponse
@@ -36,3 +36,28 @@ async def get_reading(reading_id: int):
     if not result:
         raise HTTPException(status_code=404, detail="占卜记录不存在")
     return ReadingResponse(**result)
+
+
+@router.websocket("/ws")
+async def websocket_reading(websocket: WebSocket):
+    """WebSocket 占卜端"""
+    await websocket.accept()
+    session_id = None
+    try:
+        while True:
+            data = await websocket.receive_json()
+            question = data.get("question", "")
+            spread_type = data.get("spread_type", "single")
+            model_name = data.get("model_name")
+            sid = data.get("session_id") or session_id
+
+            result = await reading_service.create_reading_langgraph(
+                question=question,
+                spread_type=spread_type,
+                session_id=sid,
+                model_name=model_name,
+            )
+            session_id = result.get("session_id")
+            await websocket.send_json(result)
+    except WebSocketDisconnect:
+        pass
