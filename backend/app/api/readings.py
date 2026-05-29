@@ -51,13 +51,19 @@ async def websocket_reading(websocket: WebSocket):
             model_name = data.get("model_name")
             sid = data.get("session_id") or session_id
 
-            result = await reading_service.create_reading_langgraph(
-                question=question,
-                spread_type=spread_type,
-                session_id=sid,
-                model_name=model_name,
-            )
-            session_id = result.get("session_id")
-            await websocket.send_json(result)
+            try:
+                result = await reading_service.create_reading_langgraph(
+                    question=question,
+                    spread_type=spread_type,
+                    session_id=sid,
+                    model_name=model_name,
+                )
+                session_id = result.get("session_id")
+                await websocket.send_json(result)
+            except Exception as e:
+                await websocket.send_json({
+                    "error": str(e),
+                    "status": "error",
+                })
     except WebSocketDisconnect:
         pass

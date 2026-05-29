@@ -88,7 +88,7 @@ async def create_reading(question: str, spread_type: str, session_id: Optional[s
         "session_id": session_id,
         "question": reading.question,
         "spread_type": reading.spread_type,
-        "created_at": reading.created_at,
+        "created_at": reading.created_at.isoformat() if reading.created_at else None,
         "cards": [
             {
                 "card_id": rc.card.id,
@@ -116,7 +116,7 @@ def get_reading_by_id(reading_id: int) -> Optional[dict]:
         "session_id": reading.session_id,
         "question": reading.question,
         "spread_type": reading.spread_type,
-        "created_at": reading.created_at,
+        "created_at": reading.created_at.isoformat() if reading.created_at else None,
         "cards": [
             {
                 "card_id": rc.card.id,
@@ -189,7 +189,7 @@ async def create_reading_langgraph(question: str, spread_type: str, session_id: 
         "session_id": session_id,
         "question": reading.question,
         "spread_type": reading.spread_type,
-        "created_at": reading.created_at,
+        "created_at": reading.created_at.isoformat() if reading.created_at else None,
         "cards": [
             {
                 "card_id": rc.card.id,

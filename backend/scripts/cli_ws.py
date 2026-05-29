@@ -42,7 +42,7 @@ async def _interactive_session(ws_url: str):
 
             payload = {
                 "question": question.strip(),
-                "spread_type": "three",
+                "spread_type": "single",
             }
             if session_id:
                 payload["session_id"] = session_id
@@ -65,3 +65,11 @@ def _print_result(data: dict):
             interp = interp[:300] + "..."
         print(f"  解读: {interp}\n")
     print("---\n")
+
+
+if __name__ == "__main__":
+    ws_url = "ws://localhost:8000/api/v1/readings/ws"
+    for i, arg in enumerate(sys.argv):
+        if arg == "-u" and i + 1 < len(sys.argv):
+            ws_url = sys.argv[i + 1]
+    run(ws_url)
