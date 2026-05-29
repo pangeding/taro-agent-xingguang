@@ -48,3 +48,7 @@ def _print_result(data: dict):
             interp = interp[:300] + "..."
         print(f"  解读: {interp}\n")
     print("---\n")
+
+
+if __name__ == "__main__":
+    run()
