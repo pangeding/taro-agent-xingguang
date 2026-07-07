@@ -10,7 +10,7 @@ type Settings struct {
 	APIV1Str           string   `env:"API_V1_STR" envDefault:"/api/v1"`
 	ProjectName        string   `env:"PROJECT_NAME" envDefault:"星光塔罗AI助手"`
 	Version            string   `env:"VERSION" envDefault:"0.1.0"`
-	DatabaseURL        string   `env:"DATABASE_URL" envDefault:"data/taro.db"`
+	DatabaseURL        string   `env:"DATABASE_URL" envDefault:"data/tarot.db"`
 	DashScopeAPIKey    string   `env:"DASHSCOPE_API_KEY"`
 	DashScopeBaseURL   string   `env:"DASHSCOPE_BASE_URL" envDefault:"https://dashscope.aliyuncs.com/compatible-mode/v1"`
 	DashScopeModel     string   `env:"DASHSCOPE_MODEL"`

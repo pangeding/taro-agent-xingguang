@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	d, err := gorm.Open(sqlite.Open("data/taro.db"), &gorm.Config{})
+	d, err := gorm.Open(sqlite.Open("data/tarot.db"), &gorm.Config{})
 	if err != nil {
 		panic("failed to connect database")
 	}
