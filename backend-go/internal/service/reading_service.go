@@ -132,7 +132,17 @@ func (s *ReadingService) CreateReading(question, spreadType string, sessionID *s
 	for i := range resultCards {
 		rc := &resultCards[i]
 		card := cardMap[rc.CardID]
-		rc.Interpretation = agent.GetBasicInterpretation(card, rc.IsReversed)
+		if s.LLM != nil {
+			prompt := agent.BuildCardPrompt(card, rc.IsReversed, question, rc.Position, spreadType)
+			text, err := s.LLM.Chat(context.Background(), agent.SYSTEM_PROMPT, prompt)
+			if err != nil {
+				rc.Interpretation = agent.GetBasicInterpretation(card, rc.IsReversed)
+			} else {
+				rc.Interpretation = text
+			}
+		} else {
+			rc.Interpretation = agent.GetBasicInterpretation(card, rc.IsReversed)
+		}
 		s.DB.Save(rc)
 	}
 
