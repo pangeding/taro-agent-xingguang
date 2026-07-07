@@ -15,7 +15,7 @@ cp .env.example .env
 ```bash
 go run scripts/import_cards/main.go
 ```
-执行后会生成 `data/taro.db`。
+执行后会生成 `data/tarot.db`。
 
 ## 3. 启动服务
 默认监听 `:8000`：
