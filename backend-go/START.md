@@ -21,6 +21,7 @@ go run scripts/import_cards/main.go
 默认监听 `:8000`：
 ```bash
 go run cmd/server/main.go
+ cd backend-go && go run cmd/server/main.go
 ```
 
 ## 4. 验证

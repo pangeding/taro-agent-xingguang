@@ -61,3 +61,30 @@ type Feedback struct {
 func (Feedback) TableName() string {
 	return "feedbacks"
 }
+
+type Conversation struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    string    `gorm:"size:100;index" json:"user_id"`
+	Title     string    `gorm:"size:200;default:新对话" json:"title"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt time.Time `gorm:"autoCreateTime;autoUpdateTime" json:"updated_at"`
+	Messages  []Message `gorm:"foreignKey:ConversationID" json:"messages,omitempty"`
+}
+
+func (Conversation) TableName() string {
+	return "conversations"
+}
+
+type Message struct {
+	ID             uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ConversationID uint      `gorm:"index" json:"conversation_id"`
+	Role           string    `gorm:"size:20" json:"role"`
+	Content        string    `gorm:"type:text" json:"content"`
+	Type           string    `gorm:"size:20;default:text" json:"type"`
+	ReadingID      *uint     `json:"reading_id"`
+	CreatedAt      time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (Message) TableName() string {
+	return "messages"
+}

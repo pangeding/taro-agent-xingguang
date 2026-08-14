@@ -19,5 +19,5 @@ func Init(dbURL string) *gorm.DB {
 }
 
 func AutoMigrate(db *gorm.DB) {
-	db.AutoMigrate(&TarotCard{}, &Reading{}, &ReadingCard{}, &Feedback{})
+	db.AutoMigrate(&TarotCard{}, &Reading{}, &ReadingCard{}, &Feedback{}, &Conversation{}, &Message{})
 }
