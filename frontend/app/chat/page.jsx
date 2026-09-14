@@ -56,6 +56,7 @@ export default function ChatPage() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [error, setError] = useState('')
   const messagesEndRef = useRef(null)
   const abortControllerRef = useRef(null)
 
@@ -69,9 +70,16 @@ export default function ChatPage() {
   }, [messages, streamContent])
 
   useEffect(() => {
-    if (ready) {
-      loadConversations()
+    if (!ready) return
+    const bootstrap = async () => {
+      const list = await loadConversations()
+      if (list && list.length > 0) {
+        loadConversation(list[0].id)
+      } else {
+        createConversation()
+      }
     }
+    bootstrap()
   }, [ready])
 
   const scrollToBottom = () => {
@@ -88,10 +96,11 @@ export default function ChatPage() {
         method: 'POST',
         credentials: 'same-origin',
       })
-      if (!res.ok) throw new Error('init user failed')
+      if (!res.ok) throw new Error(`初始化用户失败 (${res.status})`)
       setReady(true)
     } catch (err) {
       console.error('Failed to init user:', err)
+      setError('无法连接到服务，请确认后端已启动后刷新页面。')
     }
   }
 
@@ -101,12 +110,14 @@ export default function ChatPage() {
         headers: getHeaders(),
         credentials: 'same-origin',
       })
-      if (res.ok) {
-        const data = await res.json()
-        setConversations(data)
-      }
+      if (!res.ok) throw new Error(`加载会话失败 (${res.status})`)
+      const data = await res.json()
+      setConversations(data)
+      return data
     } catch (err) {
       console.error('Failed to load conversations:', err)
+      setError('加载会话列表失败，请稍后重试。')
+      return null
     }
   }
 
@@ -134,14 +145,17 @@ export default function ChatPage() {
         credentials: 'same-origin',
         body: JSON.stringify({}),
       })
-      if (res.ok) {
-        const data = await res.json()
-        loadConversations()
-        setCurrentConversation(data)
-        setMessages([])
-      }
+      if (!res.ok) throw new Error(`创建会话失败 (${res.status})`)
+      const data = await res.json()
+      setConversations((prev) => [data, ...prev])
+      setCurrentConversation(data)
+      setMessages([])
+      setError('')
+      return data
     } catch (err) {
       console.error('Failed to create conversation:', err)
+      setError('创建会话失败，请稍后重试。')
+      return null
     }
   }
 
@@ -165,7 +179,13 @@ export default function ChatPage() {
   }
 
   const sendMessage = async (content) => {
-    if (!currentConversation || !content.trim() || isStreaming) return
+    if (!content.trim() || isStreaming) return
+
+    let conversation = currentConversation
+    if (!conversation) {
+      conversation = await createConversation()
+      if (!conversation) return
+    }
 
     const userMessage = {
       id: Date.now(),
@@ -178,6 +198,7 @@ export default function ChatPage() {
     setInput('')
     setIsStreaming(true)
     setStreamContent('')
+    setError('')
 
     abortControllerRef.current?.abort()
     const controller = new AbortController()
@@ -201,7 +222,7 @@ export default function ChatPage() {
     }
 
     try {
-      const response = await fetch(`${API_BASE}/conversations/${currentConversation.id}/messages`, {
+      const response = await fetch(`${API_BASE}/conversations/${conversation.id}/messages`, {
         method: 'POST',
         headers: getHeaders(),
         credentials: 'same-origin',
@@ -346,6 +367,15 @@ export default function ChatPage() {
 
         {/* 消息列表 */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {error && (
+            <div className="flex items-start justify-between gap-3 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-2 rounded-lg">
+              <span>{error}</span>
+              <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">
+                ✕
+              </button>
+            </div>
+          )}
+
           {messages.length === 0 && !isStreaming && (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="text-6xl mb-4">🔮</div>
@@ -394,13 +424,13 @@ export default function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="输入你的问题... (Enter发送, Shift+Enter换行)"
-              disabled={isStreaming || !currentConversation}
+              disabled={isStreaming}
               className="flex-1 px-4 py-3 border border-mystic-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
               rows={1}
             />
             <button
               onClick={handleSend}
-              disabled={isStreaming || !input.trim() || !currentConversation}
+              disabled={isStreaming || !input.trim()}
               className="px-6 py-3 bg-gradient-mystic text-white font-semibold rounded-xl hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               发送
