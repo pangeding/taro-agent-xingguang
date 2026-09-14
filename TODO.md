@@ -37,11 +37,6 @@
 ### 3. 架构
 
 1. SQLite 转 MySQL
-2. 【done】重构项目，将 .venv pyprojecy.toml data/ scripts/ 移动到backend目录下面
-3. 【done】将 backend中的requirements.txt 删去
-4. 【done】将pyproject.toml直接从根目录移动到backend的兼容问题
-5. 【done】将 makefile 的 scripts 的命令修改
-6. 【done】将 scripts 里的 import_cards.py 脚本修改
 
 ### 4. 运维
 1. 【done】scripts 脚本运行失败
@@ -58,8 +53,6 @@
 1. 重构后端
 2. 手搓
 3. 使用 eino 库
-
-### 8. 完整python方案
 
 ### 9. go 网关 和go my-coding-
 

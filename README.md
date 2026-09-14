@@ -9,27 +9,28 @@
 ## 最小MVP功能
 
 - ✅ 单张塔罗牌抽牌
-- ✅ AI智能解读（基于DeepSeek API）
+- ✅ AI智能解读（基于 DashScope / OpenAI 兼容接口）
 - ✅ 匿名占卜会话
 - ✅ 简洁美观的Web界面
 - ✅ 基础占卜历史记录
 
 ## 技术栈
 
-### 后端
-- Python 3.10+
-- FastAPI (Web框架)
-- SQLite (数据库，简化版)
-- Peewee (ORM)
-- DeepSeek API (AI解读)
+### 后端 (backend-go)
+- Go 1.22+
+- Gin (Web框架)
+- GORM + mattn/go-sqlite3 (ORM + CGO 驱动)
+- SQLite (数据库)
+- CloudWeGo Eino (Agent 编排)
+- DashScope API / OpenAI 兼容接口 (AI 解读)
 
-### 前端
+### 前端 (frontend)
 - Next.js 14 (React框架)
 - Tailwind CSS (样式)
 - Axios (HTTP客户端)
 
 ### 开发工具
-- uv (Python包管理)
+- Go Modules (Go包管理)
 - pnpm (Node.js包管理)
 
 ## 快速开始
@@ -37,36 +38,41 @@
 ### 1. 环境准备
 
 ```bash
-# 安装 Python 3.10+ 和 Node.js 16+
-# 确保已安装 uv 和 pnpm
+# 安装 Go 1.22+、GCC（CGO 依赖）、Node.js 16+
+# 确保已安装 pnpm
 ```
 
-### 2. 后端设置
+### 2. 后端设置 (backend-go)
 
 ```bash
 # 进入后端目录
-cd backend
+cd backend-go
 
 # 复制环境变量文件
 cp .env.example .env
 
-# 编辑 .env 文件，配置 DeepSeek API 密钥
-# DEEPSEEK_API_KEY="your_api_key_here"
+# 编辑 .env 文件，配置 DashScope API 密钥
+# DASHSCOPE_API_KEY="your_api_key_here"
 
-# 使用 uv 安装依赖
-uv sync
+# 下载依赖
+go mod download
 
-# 初始化数据库
-python ../scripts/init_db.py
-
-# 导入塔罗牌数据
-python ../scripts/import_cards.py
+# 初始化数据库并导入塔罗牌数据（生成 data/taro.db）
+go run scripts/import_cards/main.go
 
 # 启动后端服务器
-python run.py
+go run cmd/server/main.go
 ```
 
-后端将在 http://localhost:8000 运行，API文档在 http://localhost:8000/docs
+后端将在 http://localhost:8000 运行，健康检查 `GET /health` 返回 `{"status":"healthy"}`。
+
+也可在项目根目录使用 Makefile：
+
+```bash
+make install-backend
+make init-db
+make backend
+```
 
 ### 3. 前端设置
 
@@ -87,10 +93,14 @@ pnpm dev
 
 ### 核心接口
 
+- `GET /health` - 健康检查
 - `GET /api/v1/cards/` - 获取所有塔罗牌
+- `GET /api/v1/cards/{id}` - 获取单张牌详情
 - `GET /api/v1/cards/random/` - 随机抽取一张牌
 - `POST /api/v1/readings/` - 创建新的占卜
+- `POST /api/v1/readings/langgraph` - 创建新的占卜（Eino 编排）
 - `GET /api/v1/readings/{reading_id}` - 获取占卜详情
+- `WS /api/v1/readings/ws` - WebSocket 占卜
 
 ### 占卜请求示例
 
@@ -106,38 +116,44 @@ pnpm dev
 
 ```
 taro_agent/
-├── backend/                 # 后端服务
-│   ├── app/
-│   │   ├── api/            # API路由
-│   │   ├── core/           # 核心配置
-│   │   ├── db/             # 数据库模型
-│   │   ├── agent/          # AI代理模块
-│   │   └── main.py         # FastAPI应用入口
-│   ├── requirements.txt    # Python依赖
-│   ├── .env.example        # 环境变量示例
-│   └── run.py             # 启动脚本
+├── backend-go/              # Go 后端服务
+│   ├── cmd/server/          # 服务入口
+│   ├── internal/
+│   │   ├── agent/           # Eino Agent 编排、提示词、LLM
+│   │   ├── config/          # 环境变量配置
+│   │   ├── db/              # GORM 模型与数据库连接
+│   │   ├── handler/         # HTTP / WebSocket handlers
+│   │   ├── middleware/      # CORS、用户中间件
+│   │   └── service/         # 业务逻辑
+│   ├── scripts/import_cards # 数据导入脚本
+│   ├── data/                # tarot_cards.json / taro.db
+│   └── .env.example         # 环境变量示例
 ├── frontend/               # 前端应用
 │   ├── app/                # Next.js app目录
 │   ├── components/         # React组件
 │   ├── package.json        # 前端依赖
 │   └── tailwind.config.js  # Tailwind配置
-├── data/                   # 塔罗牌数据
-│   └── tarot_cards.json    # 22张大阿尔卡纳牌数据
-├── scripts/                # 工具脚本
-│   ├── init_db.py         # 数据库初始化
-│   └── import_cards.py    # 数据导入脚本
-└── BEGIN.md               # 项目规划文档
+├── doc/                    # 技术文档
+└── Makefile                # 常用命令
 ```
 
 ## 开发说明
 
 ### 数据库
 
-项目使用 SQLite 简化部署，数据文件位于 `backend/taro.db`。
+项目使用 SQLite 简化部署，数据文件位于 `backend-go/data/taro.db`。数据库与表结构由导入脚本自动创建。
 
 ### AI解读
 
-AI解读基于 DeepSeek API，需要配置有效的 API 密钥。解读过程是异步的，创建占卜后会在后台生成解读结果。
+AI解读基于 DashScope（OpenAI 兼容接口），需要配置有效的 API 密钥。`.env` 主要配置项：
+
+```
+DATABASE_URL=data/taro.db
+DASHSCOPE_API_KEY=your_key_here
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+DASHSCOPE_MODEL=qwen-plus
+BACKEND_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
 
 ### 扩展计划
 
@@ -150,7 +166,7 @@ AI解读基于 DeepSeek API，需要配置有效的 API 密钥。解读过程是
 ## 注意事项
 
 - 本产品仅供娱乐参考，请理性看待占卜结果
-- 需要有效的 DeepSeek API 密钥才能使用AI解读功能
+- 需要有效的 DashScope API 密钥才能使用AI解读功能
 - 默认使用 SQLite，生产环境建议更换为 MySQL/PostgreSQL
 
 ## 许可证
