@@ -56,7 +56,8 @@ github.com/joho/godotenv
 
 ### 3.2 internal/config/config.go
 - 新增字段：`DBDriver`、`MySQLHost`、`MySQLPort`、`MySQLDB`、`MySQLUser`、`MySQLPassword`。
-- `Load()` 首行调用 `godotenv.Load()`（忽略文件不存在错误），使 server/脚本自动加载 `.env`（同时修复当前 `DATABASE_URL`、`DASHSCOPE_API_KEY` 带引号不生效问题）。
+- `Load()` 首行调用 `godotenv.Overload()`（忽略文件不存在错误），使 server/脚本自动加载 `.env`（同时修复当前 `DATABASE_URL`、`DASHSCOPE_API_KEY` 带引号不生效问题）。
+  - 用 `Overload` 而非 `Load`：shell 中若存在同名旧变量（如过期的 `DASHSCOPE_API_KEY`），`Load` 不会覆盖，会导致应用使用错误值（本次即因此出现 DashScope 403），故以 `.env` 为准强制覆盖。
 - 新增方法：
   - `EffectiveDB() (driver, dsn string)`
   - `MySQLDSN() string`

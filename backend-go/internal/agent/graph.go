@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"backend-go/internal/db"
@@ -80,6 +81,7 @@ func interpretCards(ctx context.Context, llm *ChatClient, state *ReadingState) (
 		prompt := BuildCardPrompt(ci.Card, ci.IsReversed, state.Question, ci.Position, state.SpreadType)
 		text, err := llm.Chat(ctx, SYSTEM_PROMPT, prompt)
 		if err != nil {
+			log.Printf("LLM interpret failed for %s: %v", ci.Name, err)
 			state.Interpretations = append(state.Interpretations, CardInterpretation{
 				CardID:         ci.ID,
 				CardName:       ci.Name,
@@ -106,6 +108,7 @@ func synthesize(ctx context.Context, llm *ChatClient, state *ReadingState) (*Rea
 	prompt := BuildSynthesisPrompt(state.Interpretations, state.Question)
 	text, err := llm.Chat(ctx, SYSTEM_PROMPT, prompt)
 	if err != nil {
+		log.Printf("LLM synthesize failed: %v", err)
 		state.Synthesis = "（综合分析暂时不可用）"
 		state.Status = "partial"
 		state.Error = err.Error()

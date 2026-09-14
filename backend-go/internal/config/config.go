@@ -30,7 +30,8 @@ type Settings struct {
 var Config *Settings
 
 func Load() *Settings {
-	_ = godotenv.Load()
+	// Overload：以 .env 为准，覆盖 shell 中可能存在的过期同名变量
+	_ = godotenv.Overload()
 	cfg, err := env.ParseAs[Settings]()
 	if err != nil {
 		log.Fatalf("Failed to parse config: %v", err)
