@@ -1,5 +1,5 @@
 ### 0. 项目介绍
-该项目是全栈星光塔罗ai。前端在frontend中，后端有python和go 2个版本。主要开发go版本（backend-go文件夹），python版本（backend文件夹）在考虑废弃，平时如无必要不用去读取backend文件夹。
+该项目是全栈星光塔罗ai。前端在frontend中，后端为go版本（backend-go文件夹）。Python 后端（backend文件夹）已删除，历史技术文档保留在 doc 文件夹。
 ### 1. 语言要求
 1. 使用中文
 

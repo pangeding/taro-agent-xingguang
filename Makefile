@@ -1,5 +1,6 @@
 # 星光塔罗AI助手 - Makefile
-# 基于 README 中的快速开始指南构建
+# 后端: backend-go (Go + Gin + GORM + Eino)
+# 前端: frontend (Next.js)
 
 .PHONY: help install-backend install-frontend install init-db import-cards backend frontend dev clean test
 
@@ -9,9 +10,9 @@ help:
 	@echo ""
 	@echo "安装和初始化:"
 	@echo "  make install          - 安装后端和前端所有依赖"
-	@echo "  make install-backend  - 仅安装后端依赖"
+	@echo "  make install-backend  - 仅安装后端依赖 (go mod download)"
 	@echo "  make install-frontend - 仅安装前端依赖"
-	@echo "  make init-db          - 初始化数据库"
+	@echo "  make init-db          - 初始化数据库并导入塔罗牌数据"
 	@echo "  make import-cards     - 导入塔罗牌数据"
 	@echo ""
 	@echo "运行服务:"
@@ -30,7 +31,7 @@ install: install-backend install-frontend
 # 安装后端依赖
 install-backend:
 	@echo "📦 安装后端依赖..."
-	cd backend && uv sync
+	cd backend-go && go mod download
 	@echo "✅ 后端依赖安装完成"
 
 # 安装前端依赖
@@ -39,23 +40,21 @@ install-frontend:
 	cd frontend && pnpm install
 	@echo "✅ 前端依赖安装完成"
 
-# 初始化数据库
-init-db:
-	@echo "🗄️  初始化数据库..."
-	cd backend && python scripts/init_db.py
-	@echo "✅ 数据库初始化完成"
+# 初始化数据库并导入塔罗牌数据
+# scripts/import_cards 会自动建库建表并导入，幂等可重复执行
+init-db: import-cards
 
 # 导入塔罗牌数据
 import-cards:
-	@echo "🃏 导入塔罗牌数据..."
-	cd backend && python scripts/import_cards.py
+	@echo "🃏 初始化数据库并导入塔罗牌数据..."
+	cd backend-go && go run scripts/import_cards/main.go
 	@echo "✅ 塔罗牌数据导入完成"
 
 # 启动后端服务器
 backend:
 	@echo "🚀 启动后端服务器..."
-	@echo "📍 API 文档: http://localhost:8000/docs"
-	cd backend && python run.py
+	@echo "📍 服务地址: http://localhost:8000"
+	cd backend-go && go run cmd/server/main.go
 
 # 启动前端开发服务器
 frontend:
@@ -64,31 +63,25 @@ frontend:
 	cd frontend && pnpm dev
 
 # 同时启动后端和前端（后台运行）
-dev: 
+dev:
 	@echo "🚀 同时启动后端和前端服务..."
-	@echo "📍 后端: http://localhost:8000/docs"
+	@echo "📍 后端: http://localhost:8000"
 	@echo "📍 前端: http://localhost:3000"
 	@echo ""
 	@echo "提示: 使用 Ctrl+C 停止所有服务"
 	@trap 'kill %1 %2 2>/dev/null' EXIT; \
-	cd backend && python run.py & \
-	cd frontend && pnpm dev & \
+	(cd backend-go && go run cmd/server/main.go) & \
+	(cd frontend && pnpm dev) & \
 	wait
 
 # 清理临时文件和依赖
 clean:
 	@echo "🧹 清理临时文件和依赖..."
-	# 清理 Python 缓存
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	find . -type f -name "*.pyo" -delete 2>/dev/null || true
-	# 清理数据库文件
-	rm -f backend/taro.db 2>/dev/null || true
+	# 清理 Go 构建产物
+	rm -f backend-go/server 2>/dev/null || true
 	# 清理前端构建文件
 	rm -rf frontend/.next 2>/dev/null || true
 	rm -rf frontend/node_modules 2>/dev/null || true
-	# 清理后端虚拟环境
-	rm -rf backend/.venv 2>/dev/null || true
 	@echo "✅ 清理完成"
 
 # 运行测试（预留）

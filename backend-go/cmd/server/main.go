@@ -17,7 +17,9 @@ import (
 func main() {
 	cfg := config.Load()
 
-	d := db.Init(cfg.DatabaseURL)
+	driver, dsn := cfg.EffectiveDB()
+	log.Printf("database driver: %s", driver)
+	d := db.Init(driver, dsn)
 	db.AutoMigrate(d)
 
 	var llm *agent.ChatClient
