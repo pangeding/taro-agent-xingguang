@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Trash2, Menu } from 'lucide-react'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api/v1'
 
 function SimpleMarkdown({ content }) {
   if (!content) return null
@@ -47,7 +47,7 @@ function SimpleMarkdown({ content }) {
 }
 
 export default function ChatPage() {
-  const [userId, setUserId] = useState(null)
+  const [ready, setReady] = useState(false)
   const [conversations, setConversations] = useState([])
   const [currentConversation, setCurrentConversation] = useState(null)
   const [messages, setMessages] = useState([])
@@ -61,6 +61,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     initUser()
+    return () => abortControllerRef.current?.abort()
   }, [])
 
   useEffect(() => {
@@ -68,10 +69,10 @@ export default function ChatPage() {
   }, [messages, streamContent])
 
   useEffect(() => {
-    if (userId) {
+    if (ready) {
       loadConversations()
     }
-  }, [userId])
+  }, [ready])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -79,30 +80,26 @@ export default function ChatPage() {
 
   const getHeaders = () => ({
     'Content-Type': 'application/json',
-    'X-User-Id': userId || '',
   })
 
   const initUser = async () => {
-    let storedId = localStorage.getItem('user_id')
-    if (!storedId) {
-      try {
-        const res = await fetch(`${API_BASE}/user/init`, { method: 'POST' })
-        const data = await res.json()
-        storedId = data.user_id
-        localStorage.setItem('user_id', storedId)
-        document.cookie = `user_id=${storedId}; max-age=31536000; path=/`
-      } catch (err) {
-        console.error('Failed to init user:', err)
-        return
-      }
+    try {
+      const res = await fetch(`${API_BASE}/user/init`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      })
+      if (!res.ok) throw new Error('init user failed')
+      setReady(true)
+    } catch (err) {
+      console.error('Failed to init user:', err)
     }
-    setUserId(storedId)
   }
 
   const loadConversations = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations/`, {
+      const res = await fetch(`${API_BASE}/conversations`, {
         headers: getHeaders(),
+        credentials: 'same-origin',
       })
       if (res.ok) {
         const data = await res.json()
@@ -117,6 +114,7 @@ export default function ChatPage() {
     try {
       const res = await fetch(`${API_BASE}/conversations/${id}`, {
         headers: getHeaders(),
+        credentials: 'same-origin',
       })
       if (res.ok) {
         const data = await res.json()
@@ -130,9 +128,10 @@ export default function ChatPage() {
 
   const createConversation = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations/`, {
+      const res = await fetch(`${API_BASE}/conversations`, {
         method: 'POST',
         headers: getHeaders(),
+        credentials: 'same-origin',
         body: JSON.stringify({}),
       })
       if (res.ok) {
@@ -151,6 +150,7 @@ export default function ChatPage() {
       const res = await fetch(`${API_BASE}/conversations/${id}`, {
         method: 'DELETE',
         headers: getHeaders(),
+        credentials: 'same-origin',
       })
       if (res.ok) {
         if (currentConversation?.id === id) {
@@ -179,70 +179,105 @@ export default function ChatPage() {
     setIsStreaming(true)
     setStreamContent('')
 
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    let fullContent = ''
+    let finished = false
+    let errorMessage = null
+
+    const appendAssistant = (text) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          role: 'assistant',
+          content: text,
+          type: 'text',
+          created_at: new Date().toISOString(),
+        },
+      ])
+    }
+
     try {
       const response = await fetch(`${API_BASE}/conversations/${currentConversation.id}/messages`, {
         method: 'POST',
         headers: getHeaders(),
+        credentials: 'same-origin',
+        signal: controller.signal,
         body: JSON.stringify({ content: content.trim() }),
       })
 
-      if (!response.ok) throw new Error('Failed to send message')
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        throw new Error(detail || `请求失败 (${response.status})`)
+      }
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let fullContent = ''
+
+      const handleEvent = (eventName, dataStr) => {
+        let data
+        try {
+          data = JSON.parse(dataStr)
+        } catch (e) {
+          return
+        }
+        if (eventName === 'error' || data.error) {
+          errorMessage = data.error || '服务出错了'
+          return
+        }
+        if (data.delta) {
+          fullContent += data.delta
+          setStreamContent(fullContent)
+        }
+        if (data.done) {
+          finished = true
+          appendAssistant(data.full_text || fullContent)
+          loadConversations()
+        }
+      }
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
         buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
+        const blocks = buffer.split('\n\n')
+        buffer = blocks.pop() || ''
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6)
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.delta) {
-                fullContent += data.delta
-                setStreamContent(fullContent)
-              }
-              if (data.done) {
-                const assistantMessage = {
-                  id: Date.now(),
-                  role: 'assistant',
-                  content: data.full_text || fullContent,
-                  type: 'text',
-                  created_at: new Date().toISOString(),
-                }
-                setMessages((prev) => [...prev, assistantMessage])
-                setStreamContent('')
-                setIsStreaming(false)
-                loadConversations()
-              }
-            } catch (e) {
-              // ignore JSON parse errors
+        for (const block of blocks) {
+          let eventName = 'message'
+          const dataLines = []
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) {
+              eventName = line.slice(6).trim()
+            } else if (line.startsWith('data:')) {
+              dataLines.push(line.slice(5).replace(/^ /, ''))
             }
+          }
+          if (dataLines.length) {
+            handleEvent(eventName, dataLines.join('\n'))
           }
         }
       }
     } catch (err) {
+      if (err.name === 'AbortError') {
+        return
+      }
       console.error('Stream error:', err)
+      errorMessage = err.message || '回复出现错误，请重试。'
+    } finally {
+      if (errorMessage) {
+        if (fullContent) appendAssistant(fullContent)
+        appendAssistant(`抱歉，${errorMessage}`)
+      } else if (!finished && fullContent) {
+        appendAssistant(fullContent)
+      }
       setIsStreaming(false)
       setStreamContent('')
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          role: 'assistant',
-          content: '抱歉，回复出现错误，请重试。',
-          type: 'text',
-          created_at: new Date().toISOString(),
-        },
-      ])
     }
   }
 
@@ -258,7 +293,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-screen bg-mystic-50">
+    <div className="flex h-[calc(100vh-8rem)] bg-mystic-50 rounded-xl overflow-hidden border border-mystic-200">
       {/* 侧边栏 */}
       {sidebarOpen && (
         <div className="w-64 bg-white border-r border-mystic-200 flex flex-col">

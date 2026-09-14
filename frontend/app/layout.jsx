@@ -30,6 +30,9 @@ export default function RootLayout({ children }) {
                     <a href="/" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
                       首页
                     </a>
+                    <a href="/chat" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
+                      塔罗对话
+                    </a>
                     <a href="#" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
                       我的占卜
                     </a>

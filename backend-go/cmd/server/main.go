@@ -47,14 +47,11 @@ func main() {
 	r.GET("/", handler.Root(cfg))
 	r.GET("/health", handler.HealthCheck)
 
-	user := r.Group(cfg.APIV1Str + "/user")
-	{
-		user.POST("/init", handler.InitUser())
-	}
-
 	v1 := r.Group(cfg.APIV1Str)
 	v1.Use(middleware.UserID())
 	{
+		v1.POST("/user/init", handler.InitUser())
+
 		cards := v1.Group("/cards")
 		cards.GET("/", handler.GETAllCards(cardService))
 		cards.GET("/:id", handler.GetCard(cardService))
@@ -68,8 +65,8 @@ func main() {
 
 		conversations := v1.Group("/conversations")
 		{
-			conversations.POST("/", handler.CreateConversation(conversationService))
-			conversations.GET("/", handler.ListConversations(conversationService))
+			conversations.POST("", handler.CreateConversation(conversationService))
+			conversations.GET("", handler.ListConversations(conversationService))
 			conversations.GET("/:id", handler.GetConversation(conversationService))
 			conversations.DELETE("/:id", handler.DeleteConversation(conversationService))
 			conversations.PATCH("/:id/title", handler.UpdateConversationTitle(conversationService))

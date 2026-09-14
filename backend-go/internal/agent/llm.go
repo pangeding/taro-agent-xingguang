@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -84,21 +85,21 @@ func (c *ChatClient) ChatStreamSimple(ctx context.Context, systemPrompt, userPro
 }
 
 type StreamHandler struct {
-	stream       *ssestream.Stream[openai.ChatCompletionChunk]
-	fullContent  string
-	done         bool
+	stream      *ssestream.Stream[openai.ChatCompletionChunk]
+	fullContent string
+	done        bool
 }
 
 func (s *StreamHandler) Next() (string, error) {
 	if s.done {
-		return "", fmt.Errorf("stream completed")
+		return "", io.EOF
 	}
 	if !s.stream.Next() {
 		s.done = true
 		if err := s.stream.Err(); err != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("stream completed")
+		return "", io.EOF
 	}
 	evt := s.stream.Current()
 	for _, choice := range evt.Choices {

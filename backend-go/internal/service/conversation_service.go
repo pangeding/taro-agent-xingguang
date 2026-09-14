@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"backend-go/internal/agent"
 	"backend-go/internal/db"
@@ -32,10 +33,10 @@ type ChatChunk struct {
 }
 
 type ChatDone struct {
-	Delta   string `json:"delta"`
+	Delta    string `json:"delta"`
 	FullText string `json:"full_text"`
-	Done    bool   `json:"done"`
-	MsgID   uint   `json:"msg_id"`
+	Done     bool   `json:"done"`
+	MsgID    uint   `json:"msg_id"`
 }
 
 func (s *ConversationService) StreamChat(ctx context.Context, conversationID uint, userID, content string, writer func(event string, data string)) error {
@@ -70,16 +71,24 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 	var fullContent string
 	for {
 		delta, err := stream.Next()
-		if err != nil {
+		if errors.Is(err, io.EOF) {
 			break
+		}
+		if err != nil {
+			return err
 		}
 		fullContent += delta
 		writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(delta)))
 	}
 
-	if writer != nil {
-		assistantMsg, _ := s.AddMessage(conversationID, userID, "assistant", fullContent, "text")
-		writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "msg_id": %d}`, toRawJSON(fullContent), assistantMsg.ID))
+	assistantMsg, err := s.AddMessage(conversationID, userID, "assistant", fullContent, "text")
+	if err != nil {
+		return err
+	}
+	writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "msg_id": %d}`, toRawJSON(fullContent), assistantMsg.ID))
+
+	if count, err := s.GetMessageCount(conversationID); err == nil && int(count) == 2 {
+		s.GenerateTitleAsync(conversationID)
 	}
 
 	return nil
@@ -244,8 +253,11 @@ func (s *ConversationService) StreamTarotReading(ctx context.Context, conversati
 	var fullContent string
 	for {
 		delta, err := stream.Next()
-		if err != nil {
+		if errors.Is(err, io.EOF) {
 			break
+		}
+		if err != nil {
+			return err
 		}
 		fullContent += delta
 		writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(delta)))
