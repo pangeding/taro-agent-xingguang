@@ -19,8 +19,8 @@
 ### 后端 (backend-go)
 - Go 1.22+
 - Gin (Web框架)
-- GORM + mattn/go-sqlite3 (ORM + CGO 驱动)
-- SQLite (数据库)
+- GORM (ORM，MySQL 驱动为主 + SQLite 回退驱动)
+- MySQL 8+ (默认数据库) / SQLite (回退)
 - CloudWeGo Eino (Agent 编排)
 - DashScope API / OpenAI 兼容接口 (AI 解读)
 
@@ -51,14 +51,21 @@ cd backend-go
 # 复制环境变量文件
 cp .env.example .env
 
-# 编辑 .env 文件，配置 DashScope API 密钥
+# 编辑 .env，配置数据库与 DashScope API 密钥
+# MYSQL_HOST / MYSQL_PORT / MYSQL_DB / MYSQL_USER / MYSQL_PASSWORD
 # DASHSCOPE_API_KEY="your_api_key_here"
+
+# 准备 MySQL 数据库（一次性）
+# CREATE DATABASE IF NOT EXISTS tarot CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 # 下载依赖
 go mod download
 
-# 初始化数据库并导入塔罗牌数据（生成 data/taro.db）
+# 初始化数据库并导入塔罗牌数据（自动建表）
 go run scripts/import_cards/main.go
+
+# （可选）一次性迁移旧 SQLite 历史数据
+go run scripts/migrate_sqlite_to_mysql/main.go
 
 # 启动后端服务器
 go run cmd/server/main.go
@@ -125,8 +132,8 @@ taro_agent/
 │   │   ├── handler/         # HTTP / WebSocket handlers
 │   │   ├── middleware/      # CORS、用户中间件
 │   │   └── service/         # 业务逻辑
-│   ├── scripts/import_cards # 数据导入脚本
-│   ├── data/                # tarot_cards.json / taro.db
+│   ├── scripts/            # import_cards / migrate_sqlite_to_mysql
+│   ├── data/                # tarot_cards.json、tarot.db(SQLite 回退/迁移源)
 │   └── .env.example         # 环境变量示例
 ├── frontend/               # 前端应用
 │   ├── app/                # Next.js app目录
@@ -141,14 +148,35 @@ taro_agent/
 
 ### 数据库
 
-项目使用 SQLite 简化部署，数据文件位于 `backend-go/data/taro.db`。数据库与表结构由导入脚本自动创建。
+默认使用 MySQL 8+，表结构由 GORM AutoMigrate 在启动/导入脚本中自动创建。可通过 `DB_DRIVER` 在 MySQL 与 SQLite 之间切换，代码无需改动：
+
+```
+# MySQL（默认）
+DB_DRIVER=mysql
+MYSQL_HOST=172.23.96.1
+MYSQL_PORT=3306
+MYSQL_DB=tarot
+MYSQL_USER=root
+MYSQL_PASSWORD=your_password
+
+# SQLite 回退
+DB_DRIVER=sqlite
+DATABASE_URL=data/tarot.db
+```
+
+历史 SQLite 数据可用 `go run scripts/migrate_sqlite_to_mysql/main.go` 一次性迁移。
 
 ### AI解读
 
 AI解读基于 DashScope（OpenAI 兼容接口），需要配置有效的 API 密钥。`.env` 主要配置项：
 
 ```
-DATABASE_URL=data/taro.db
+DB_DRIVER=mysql
+MYSQL_HOST=172.23.96.1
+MYSQL_PORT=3306
+MYSQL_DB=tarot
+MYSQL_USER=root
+MYSQL_PASSWORD=your_password
 DASHSCOPE_API_KEY=your_key_here
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 DASHSCOPE_MODEL=qwen-plus
@@ -167,7 +195,7 @@ BACKEND_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 - 本产品仅供娱乐参考，请理性看待占卜结果
 - 需要有效的 DashScope API 密钥才能使用AI解读功能
-- 默认使用 SQLite，生产环境建议更换为 MySQL/PostgreSQL
+- 默认使用 MySQL 8+，可通过 `DB_DRIVER` 回退到 SQLite
 
 ## 许可证
 

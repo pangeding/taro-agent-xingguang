@@ -1,6 +1,9 @@
 package service
 
 import (
+	"math/rand"
+	"time"
+
 	"backend-go/internal/db"
 
 	"gorm.io/gorm"
@@ -91,15 +94,23 @@ func (s *CardService) GetCardByID(id uint) (*CardDetail, error) {
 }
 
 func (s *CardService) GetRandomCard() (*RandomCardItem, error) {
-	var card db.TarotCard
-	if err := s.DB.Order("RANDOM()").First(&card).Error; err != nil {
+	var cardIDs []uint
+	if err := s.DB.Model(&db.TarotCard{}).Pluck("id", &cardIDs).Error; err != nil {
 		return nil, err
 	}
-	isReversed := false
-	var seed int64
-	s.DB.Raw("SELECT ABS(RANDOM()) % 2").Row().Scan(&seed)
-	isReversed = seed == 1
+	if len(cardIDs) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
 
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	id := cardIDs[r.Intn(len(cardIDs))]
+
+	var card db.TarotCard
+	if err := s.DB.First(&card, id).Error; err != nil {
+		return nil, err
+	}
+
+	isReversed := r.Intn(2) == 1
 	meaning := card.MeaningUpright
 	if isReversed {
 		meaning = card.MeaningReversed
