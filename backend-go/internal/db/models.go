@@ -28,6 +28,7 @@ type Reading struct {
 	SessionID  string        `gorm:"size:100;index" json:"session_id"`
 	Question   string        `gorm:"type:text" json:"question"`
 	SpreadType string        `gorm:"size:50;default:single" json:"spread_type"`
+	Synthesis  string        `gorm:"type:text" json:"synthesis"`
 	CreatedAt  time.Time     `gorm:"index;autoCreateTime" json:"created_at"`
 	Cards      []ReadingCard `gorm:"foreignKey:ReadingID" json:"cards"`
 }
@@ -63,9 +64,12 @@ func (Feedback) TableName() string {
 }
 
 type Conversation struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID    string    `gorm:"size:100;index" json:"user_id"`
-	Title     string    `gorm:"size:200;default:新对话" json:"title"`
+	ID     uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID string `gorm:"size:100;index" json:"user_id"`
+	Title  string `gorm:"size:200;default:新对话" json:"title"`
+	// Channel 区分会话归属的功能：chat（聊天页）/ reading（占卜页）。
+	// 占卜页写入的会话不再出现在聊天页的列表里。
+	Channel   string    `gorm:"size:20;default:chat;index" json:"channel"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoCreateTime;autoUpdateTime" json:"updated_at"`
 	Messages  []Message `gorm:"foreignKey:ConversationID" json:"messages,omitempty"`

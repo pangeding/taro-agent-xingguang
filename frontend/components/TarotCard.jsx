@@ -211,10 +211,10 @@ const TarotCard = ({ card, position, spreadType, readingId }) => {
                     <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm text-yellow-800">
-                        这张牌的独立解读正在生成中…
+                        这张牌的解读正在生成中…
                       </p>
                       <p className="text-sm text-yellow-700 mt-1">
-                        整体解读完成后，各张牌的独立解读会一并显示在这里。
+                        解读完成后会自动显示在这里，无需刷新。
                       </p>
                     </div>
                   </div>

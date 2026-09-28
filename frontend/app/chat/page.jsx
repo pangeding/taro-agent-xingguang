@@ -86,7 +86,8 @@ export default function ChatPage() {
 
   const loadConversations = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations`, {
+      // 只列 chat 频道：占卜页写入的 reading 会话不应出现在聊天侧边栏
+      const res = await fetch(`${API_BASE}/conversations?channel=chat`, {
         headers: getHeaders(),
         credentials: 'same-origin',
       })
@@ -123,7 +124,7 @@ export default function ChatPage() {
         method: 'POST',
         headers: getHeaders(),
         credentials: 'same-origin',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ channel: 'chat' }),
       })
       if (!res.ok) throw new Error(`创建会话失败 (${res.status})`)
       const data = await res.json()
@@ -189,15 +190,14 @@ export default function ChatPage() {
     let errorMessage = null
     let drawnCards = []
 
-    const appendAssistant = (text, type = 'text', cards = null) => {
+    const appendAssistant = (text) => {
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now() + Math.random(),
           role: 'assistant',
           content: text,
-          type,
-          cards: cards || undefined,
+          type: 'text',
           created_at: new Date().toISOString(),
         },
       ])
@@ -220,11 +220,6 @@ export default function ChatPage() {
       }
       if (data.done) {
         finished = true
-        if (drawnCards.length) {
-          appendAssistant('', 'cards', drawnCards)
-        }
-        appendAssistant(data.full_text || fullContent)
-        loadConversations()
       }
     }
 
@@ -241,15 +236,21 @@ export default function ChatPage() {
       console.error('Stream error:', err)
       errorMessage = err.message || '回复出现错误，请重试。'
     } finally {
-      if (errorMessage) {
-        if (fullContent) appendAssistant(fullContent)
-        appendAssistant(`抱歉，${errorMessage}`)
-      } else if (!finished && fullContent) {
-        appendAssistant(fullContent)
-      }
       setIsStreaming(false)
       setStreamContent('')
       setStreamCards([])
+
+      if (errorMessage) {
+        if (fullContent) appendAssistant(fullContent)
+        appendAssistant(`抱歉，${errorMessage}`)
+      } else if (finished) {
+        // 牌面与 assistant 消息都已落库（messages.reading_id → reading_cards），
+        // 回读服务端，刷新或切换会话后牌面依然在。
+        await loadConversation(conversation.id)
+        loadConversations()
+      } else if (fullContent) {
+        appendAssistant(fullContent)
+      }
     }
   }
 
@@ -338,28 +339,27 @@ export default function ChatPage() {
           )}
 
           {messages.map((msg) => {
-            if (msg.type === 'cards') {
-              return (
-                <div key={msg.id} className="flex justify-start">
-                  <CardStrip cards={msg.cards} />
-                </div>
-              )
-            }
+            const hasCards = Array.isArray(msg.cards) && msg.cards.length > 0
             return (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div className={`max-w-2xl p-4 rounded-xl ${
-                msg.role === 'user'
-                  ? 'bg-gradient-mystic text-white'
-                  : 'bg-white shadow-md text-mystic-800'
-              }`}>
-              <div className="wysiwyg">
-                <Markdown content={msg.content} />
+              <div
+                key={msg.id}
+                className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+              >
+                {hasCards && (
+                  <div className="mb-2 max-w-2xl">
+                    <CardStrip cards={msg.cards} />
+                  </div>
+                )}
+                <div className={`max-w-2xl p-4 rounded-xl ${
+                  msg.role === 'user'
+                    ? 'bg-gradient-mystic text-white'
+                    : 'bg-white shadow-md text-mystic-800'
+                }`}>
+                  <div className="wysiwyg">
+                    <Markdown content={msg.content} />
+                  </div>
+                </div>
               </div>
-              </div>
-            </div>
             )
           })}
 
