@@ -11,38 +11,23 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="zh-CN">
-      <body className={`${inter.className} bg-gradient-to-br from-mystic-50 to-mystic-100`}>
+      <body className={`${inter.className} text-mystic-900 bg-gradient-to-br from-mystic-50 to-mystic-100`}>
         <div className="min-h-screen">
           {/* 导航栏 */}
           <nav className="bg-white/80 backdrop-blur-sm border-b border-mystic-200">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex justify-between items-center h-16">
-                <div className="flex items-center">
-                  <div className="flex-shrink-0">
-                    <div className="flex items-center space-x-2">
-                      <div className="w-8 h-8 bg-gradient-mystic rounded-full"></div>
-                      <span className="text-xl font-bold text-mystic-900">星光塔罗</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="hidden md:block">
-                  <div className="ml-10 flex items-baseline space-x-4">
-                    <a href="/" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
-                      首页
-                    </a>
-                    <a href="/chat" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
-                      塔罗对话
-                    </a>
-                    <a href="#" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
-                      我的占卜
-                    </a>
-                    <a href="#" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
-                      塔罗知识
-                    </a>
-                    <a href="#" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
-                      关于我们
-                    </a>
-                  </div>
+                <a href="/" className="flex items-center space-x-2">
+                  <div className="w-8 h-8 bg-gradient-mystic rounded-full"></div>
+                  <span className="text-xl font-bold text-mystic-900">星光塔罗</span>
+                </a>
+                <div className="flex items-center gap-1 sm:gap-2">
+                  <a href="/" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
+                    首页占卜
+                  </a>
+                  <a href="/chat" className="text-mystic-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium">
+                    塔罗对话
+                  </a>
                 </div>
               </div>
             </div>
