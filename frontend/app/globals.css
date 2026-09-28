@@ -2,28 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 250, 250, 250;
-  --background-end-rgb: 255, 255, 255;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 10, 10, 10;
-    --background-end-rgb: 30, 30, 30;
-  }
-}
+/*
+ * 页面背景与文字颜色统一由 Tailwind 类控制（见 app/layout.jsx）。
+ *
+ * 这里原先用 CSS 变量 + prefers-color-scheme 定义了一套深色模式，但页面主体用的是
+ * 固定浅色的 Tailwind 类（bg-white / from-mystic-50 等），两套体系不联动：
+ * 系统一旦开启深色模式，body 文字会变成白色而背景仍是浅色，整页白字白底不可读。
+ * 现移除该变量体系以避免冲突；真正的深色主题留待统一的视觉改版再做。
+ */
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
   min-height: 100vh;
 }
 

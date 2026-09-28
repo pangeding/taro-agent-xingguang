@@ -1,54 +1,64 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { RotateCw, AlertCircle, Sparkles } from 'lucide-react'
-import axios from 'axios'
+import { RotateCw, AlertCircle, Sparkles, Loader2 } from 'lucide-react'
+import Markdown from './Markdown'
+import { apiFetch } from '../lib/api'
 
-const TarotCard = ({ card, position, spreadType }) => {
+// 位置语义用显式映射表，不再依赖展示文案做判断
+const POSITION_NAMES = {
+  single: ['当前问题核心'],
+  three: ['过去', '现在', '未来'],
+}
+
+const POSITION_TENSE = {
+  过去: '已经经历',
+  现在: '正在面对',
+  未来: '将要面对',
+}
+
+function resolvePositionName(spreadType, position) {
+  return POSITION_NAMES[spreadType]?.[position] ?? `第 ${position + 1} 张`
+}
+
+const TarotCard = ({ card, position, spreadType, readingId }) => {
   const [isFlipped, setIsFlipped] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [interpretation, setInterpretation] = useState(card.interpretation)
+  const [interpretation, setInterpretation] = useState(card.interpretation || '')
+  const [refreshError, setRefreshError] = useState('')
 
-  // 位置描述映射
-  const positionDescriptions = {
-    single: ['当前问题核心'],
-    three: ['过去', '现在', '未来'],
-  }
+  const positionName = resolvePositionName(spreadType, position)
+  const tense = POSITION_TENSE[positionName]
+  const meaning = card.is_reversed ? card.meaning_reversed : card.meaning_upright
+  const hasCardDetail = Boolean(meaning || card.description || card.keywords)
 
-  const positionName = positionDescriptions[spreadType]?.[position] || `位置 ${position + 1}`
+  const keywordList = (card.keywords || '')
+    .split(/[,，、]/)
+    .map((k) => k.trim())
+    .filter(Boolean)
 
-  // 检查解读是否已完成
+  // 父组件加载到完整数据后（GET /readings/:id）以父级数据为准
   useEffect(() => {
-    if (card.interpretation && !interpretation) {
+    if (card.interpretation) {
       setInterpretation(card.interpretation)
     }
-  }, [card.interpretation, interpretation])
+  }, [card.interpretation])
 
-  // 轮询获取解读结果
-  useEffect(() => {
-    if (!interpretation) {
-      const interval = setInterval(async () => {
-        try {
-          // 这里应该调用API获取更新的解读
-          // 暂时使用模拟
-          setIsLoading(false)
-        } catch (error) {
-          console.error('获取解读失败:', error)
-        }
-      }, 5000)
-
-      return () => clearInterval(interval)
-    }
-  }, [interpretation])
-
+  // 重新拉取该条占卜记录，取服务端最新解读（不再用字面量覆盖）
   const handleRefresh = async () => {
+    if (!readingId || isLoading) return
     setIsLoading(true)
+    setRefreshError('')
     try {
-      // 这里可以调用API重新生成解读
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      setInterpretation('新的解读内容...')
-    } catch (error) {
-      console.error('刷新解读失败:', error)
+      const data = await apiFetch(`/readings/${readingId}`)
+      const fresh = data?.cards?.find((c) => c.position === position)
+      if (fresh?.interpretation) {
+        setInterpretation(fresh.interpretation)
+      } else {
+        setRefreshError('服务端暂无可用的解读内容')
+      }
+    } catch (err) {
+      setRefreshError(err.message || '刷新失败，请稍后重试')
     } finally {
       setIsLoading(false)
     }
@@ -85,7 +95,10 @@ const TarotCard = ({ card, position, spreadType }) => {
                   </span>
                 </div>
                 <p className="text-mystic-600 mt-1">
-                  {positionName} · {card.is_reversed ? '挑战与反思' : '机遇与启示'}
+                  {positionName}
+                  {tense ? ` · ${tense}` : ''}
+                  {' · '}
+                  {card.is_reversed ? '挑战与反思' : '机遇与启示'}
                 </p>
               </div>
             </div>
@@ -93,7 +106,7 @@ const TarotCard = ({ card, position, spreadType }) => {
           <button
             onClick={() => setIsFlipped(!isFlipped)}
             className="p-2 text-mystic-500 hover:text-primary-600 hover:bg-mystic-50 rounded-lg transition-colors"
-            title={isFlipped ? "查看解读" : "查看牌面信息"}
+            title={isFlipped ? '查看AI解读' : '查看牌面信息'}
           >
             <RotateCw className="w-5 h-5" />
           </button>
@@ -103,22 +116,55 @@ const TarotCard = ({ card, position, spreadType }) => {
       {/* 牌面内容 */}
       <div className="p-6">
         {isFlipped ? (
-          // 牌面基础信息
+          // 牌面基础信息（取自数据库中的真实牌义）
           <div className="space-y-4">
-            <div className="bg-mystic-50 rounded-xl p-4">
-              <h4 className="font-medium text-mystic-900 mb-2">牌面含义</h4>
-              <p className="text-mystic-700">
-                {card.is_reversed ? '逆位表示挑战、阻碍或需要反思的方面' : '正位表示机遇、积极的发展方向'}
-              </p>
-            </div>
-            <div>
-              <h4 className="font-medium text-mystic-900 mb-2">象征意义</h4>
-              <p className="text-mystic-700">
-                这张牌在{positionName}的位置上，代表着你在当前问题中{' '}
-                {positionName === '过去' ? '已经经历' : positionName === '现在' ? '正在面对' : '将要面对'}{' '}
-                的情况。{card.is_reversed ? '逆位提醒你需要特别注意可能存在的挑战。' : '正位预示着积极的发展趋势。'}
-              </p>
-            </div>
+            {!hasCardDetail ? (
+              <p className="text-sm text-mystic-500">牌面资料加载中…</p>
+            ) : (
+              <>
+                <div className="bg-mystic-50 rounded-xl p-4">
+                  <h4 className="font-medium text-mystic-900 mb-2">
+                    {card.is_reversed ? '逆位含义' : '正位含义'}
+                  </h4>
+                  <p className="text-mystic-700">{meaning || '暂无'}</p>
+                  {keywordList.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {keywordList.map((k) => (
+                        <span key={k} className="px-2 py-0.5 text-xs bg-white text-mystic-600 rounded-full border border-mystic-200">
+                          {k}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {(card.arcana_type || card.element || card.zodiac_sign || card.suit || card.number != null) && (
+                  <dl className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                    {[
+                      ['类型', card.arcana_type === 'major' ? '大阿尔卡纳' : card.arcana_type === 'minor' ? '小阿尔卡纳' : card.arcana_type],
+                      ['花色', card.suit],
+                      ['数字', card.number != null ? String(card.number) : ''],
+                      ['元素', card.element],
+                      ['星座', card.zodiac_sign],
+                    ]
+                      .filter(([, v]) => v)
+                      .map(([label, value]) => (
+                        <div key={label} className="rounded-lg bg-mystic-50 px-3 py-2">
+                          <dt className="text-xs text-mystic-500">{label}</dt>
+                          <dd className="text-mystic-800">{value}</dd>
+                        </div>
+                      ))}
+                  </dl>
+                )}
+
+                {card.description && (
+                  <div>
+                    <h4 className="font-medium text-mystic-900 mb-2">牌面描述</h4>
+                    <p className="text-mystic-700 leading-relaxed">{card.description}</p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         ) : (
           // AI解读
@@ -130,19 +176,25 @@ const TarotCard = ({ card, position, spreadType }) => {
               </div>
               <button
                 onClick={handleRefresh}
-                disabled={isLoading}
-                className="text-sm text-primary-600 hover:text-primary-700 flex items-center space-x-1"
+                disabled={!readingId || isLoading}
+                className="text-sm text-primary-600 hover:text-primary-700 flex items-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <RotateCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <RotateCw className="w-4 h-4" />
+                )}
                 <span>刷新解读</span>
               </button>
             </div>
 
+            {refreshError && (
+              <p className="text-sm text-red-500">{refreshError}</p>
+            )}
+
             {interpretation ? (
-              <div className="prose prose-sm max-w-none">
-                <p className="text-mystic-700 leading-relaxed whitespace-pre-line">
-                  {interpretation}
-                </p>
+              <div className="text-mystic-700 leading-relaxed">
+                <Markdown content={interpretation} />
               </div>
             ) : (
               <div className="space-y-4">
@@ -159,27 +211,13 @@ const TarotCard = ({ card, position, spreadType }) => {
                     <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm text-yellow-800">
-                        AI正在深度解读这张牌的含义...
+                        这张牌的独立解读正在生成中…
                       </p>
                       <p className="text-sm text-yellow-700 mt-1">
-                        解读需要一些时间，请耐心等待。系统会自动更新解读结果。
+                        整体解读完成后，各张牌的独立解读会一并显示在这里。
                       </p>
                     </div>
                   </div>
-                </div>
-              </div>
-            )}
-
-            {/* 建议部分 */}
-            {interpretation && (
-              <div className="mt-6 pt-6 border-t border-mystic-100">
-                <h4 className="font-medium text-mystic-900 mb-3">给你的建议</h4>
-                <div className="bg-primary-50 rounded-xl p-4">
-                  <p className="text-primary-800">
-                    {card.is_reversed
-                      ? '面对逆位的挑战，建议保持耐心与反思，寻找问题的根源。'
-                      : '把握正位的机遇，积极行动，但也要保持谨慎与平衡。'}
-                  </p>
                 </div>
               </div>
             )}

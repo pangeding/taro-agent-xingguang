@@ -1,58 +1,228 @@
 'use client'
 
-import { useState } from 'react'
-import axios from 'axios'
-import { Sparkles, Clock, Star, HelpCircle, RotateCcw } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Sparkles, Clock, Star, HelpCircle, RotateCcw, Loader2 } from 'lucide-react'
 import TarotCard from '../components/TarotCard'
 import ReadingHistory from '../components/ReadingHistory'
+import Markdown from '../components/Markdown'
+import { apiFetch } from '../lib/api'
+import { streamSSE } from '../lib/sse'
+
+const EXAMPLE_QUESTIONS = [
+  '我最近的工作运势如何？',
+  '应该如何改善人际关系？',
+  '下一步的人生方向是什么？',
+  '这段感情的未来发展会怎样？',
+  '近期有什么需要注意的事项？',
+]
+
+const SPREADS = [
+  { id: 'single', name: '单张牌阵', desc: '快速洞察问题核心' },
+  { id: 'three', name: '三张牌阵', desc: '过去、现在、未来' },
+]
+
+const FEATURES = [
+  {
+    icon: Sparkles,
+    title: 'AI智能解读',
+    desc: '结合牌面含义与用户问题，提供个性化深度解读',
+  },
+  {
+    icon: Clock,
+    title: '多种牌阵',
+    desc: '支持单张、三张等多种经典牌阵选择',
+  },
+  {
+    icon: Star,
+    title: '专业准确',
+    desc: '基于传统塔罗牌知识与现代AI技术',
+  },
+]
 
 export default function Home() {
+  const [ready, setReady] = useState(false)
+  const [conversationId, setConversationId] = useState(null)
+
   const [question, setQuestion] = useState('')
   const [spreadType, setSpreadType] = useState('single')
-  const [isLoading, setIsLoading] = useState(false)
-  const [currentReading, setCurrentReading] = useState(null)
-  const [sessionId, setSessionId] = useState(null)
+
+  // idle → drawing（已抽牌，正在解读）→ streaming（逐字输出）→ done
+  const [phase, setPhase] = useState('idle')
+  const [liveCards, setLiveCards] = useState([])
+  const [streamText, setStreamText] = useState('')
+  const [reading, setReading] = useState(null)
   const [error, setError] = useState('')
+
+  const [historyVersion, setHistoryVersion] = useState(0)
+  const abortRef = useRef(null)
+
+  const isBusy = phase === 'drawing' || phase === 'streaming'
+  const hasResult = Boolean(reading) || liveCards.length > 0 || isBusy || Boolean(streamText)
+
+  // 初始化：建立用户身份，并复用最近一个会话
+  useEffect(() => {
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        await apiFetch('/user/init', { method: 'POST' })
+        const list = await apiFetch('/conversations')
+        if (!cancelled && Array.isArray(list) && list.length > 0) {
+          setConversationId(list[0].id)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || '无法连接到服务，请确认后端已启动后刷新页面')
+        }
+      } finally {
+        if (!cancelled) setReady(true)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 离开页面时中断进行中的流
+  useEffect(() => () => abortRef.current?.abort(), [])
+
+  const ensureConversation = useCallback(async () => {
+    if (conversationId) return conversationId
+    const conv = await apiFetch('/conversations', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    if (!conv?.id) throw new Error('创建会话失败')
+    setConversationId(conv.id)
+    return conv.id
+  }, [conversationId])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    if (isBusy) return
     if (!question.trim()) {
       setError('请输入你的问题')
       return
     }
 
-    setIsLoading(true)
     setError('')
+    setReading(null)
+    setLiveCards([])
+    setStreamText('')
+    setPhase('drawing')
+
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    let readingId = null
+    let collected = ''
+    let failure = ''
 
     try {
-      const response = await axios.post('http://localhost:8000/api/v1/readings/', {
-        question,
-        spread_type: spreadType,
-        session_id: sessionId,
+      const convId = await ensureConversation()
+
+      await streamSSE(`/conversations/${convId}/tarot`, {
+        body: { question: question.trim(), spread_type: spreadType },
+        signal: controller.signal,
+        onEvent: (event, data) => {
+          if (!data || typeof data !== 'object') return
+
+          if (event === 'error' || data.error) {
+            failure = data.error || '解读服务出错了'
+            return
+          }
+
+          // 逐张抽牌：立即渲染，不等解读完成
+          if (
+            event === 'card_drawn' ||
+            (data.name !== undefined && data.is_reversed !== undefined)
+          ) {
+            setLiveCards((prev) => [...prev, data])
+            return
+          }
+
+          // 逐字流式解读
+          if (data.delta) {
+            collected += data.delta
+            setStreamText(collected)
+            setPhase('streaming')
+            return
+          }
+
+          if (data.done) {
+            if (typeof data.full_text === 'string' && data.full_text) {
+              collected = data.full_text
+              setStreamText(data.full_text)
+            }
+            if (data.reading_id) readingId = data.reading_id
+          }
+        },
       })
 
-      setCurrentReading(response.data)
-      setSessionId(response.data.session_id)
-      setIsLoading(false)
+      if (failure) throw new Error(failure)
+
+      setPhase('done')
+      setHistoryVersion((v) => v + 1)
+
+      // 流式阶段只有综合解读，再取一次完整记录以获得每张牌的解读与真实牌义
+      if (readingId) {
+        try {
+          const full = await apiFetch(`/readings/${readingId}`)
+          if (full) setReading(full)
+        } catch (err) {
+          console.warn('加载完整牌面信息失败:', err)
+        }
+      }
     } catch (err) {
-      console.error('占卜失败:', err)
-      setError('占卜失败，请稍后重试')
-      setIsLoading(false)
+      if (err.name === 'AbortError') {
+        setPhase('idle')
+        return
+      }
+      setError(err.message || '占卜失败，请稍后重试')
+      setPhase('idle')
     }
   }
 
-  const handleNewReading = () => {
-    setCurrentReading(null)
+  const handleReset = () => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setReading(null)
+    setLiveCards([])
+    setStreamText('')
     setQuestion('')
+    setError('')
+    setPhase('idle')
   }
 
-  const exampleQuestions = [
-    '我最近的工作运势如何？',
-    '应该如何改善人际关系？',
-    '下一步的人生方向是什么？',
-    '这段感情的未来发展会怎样？',
-    '近期有什么需要注意的事项？',
-  ]
+  const handleSelectHistory = async (entry) => {
+    if (isBusy) return
+    abortRef.current?.abort()
+    setError('')
+    setLiveCards([])
+    setStreamText(entry.content || '')
+    setPhase('done')
+    setReading({
+      reading_id: entry.readingId,
+      question: entry.question,
+      created_at: entry.created_at,
+      cards: [],
+    })
+
+    try {
+      const full = await apiFetch(`/readings/${entry.readingId}`)
+      if (full) setReading(full)
+    } catch (err) {
+      setError(`加载该占卜记录失败：${err.message}`)
+    }
+  }
+
+  const displayCards = reading?.cards?.length
+    ? reading.cards
+    : liveCards.map((c, i) => ({ ...c, position: c.position ?? i }))
+  const displaySpreadType = reading?.spread_type || spreadType
+  const displayQuestion = reading?.question || question
 
   return (
     <div className="space-y-8">
@@ -71,9 +241,8 @@ export default function Home() {
       </div>
 
       <div className="grid lg:grid-cols-3 gap-8">
-        {/* 左侧：占卜表单 */}
+        {/* 左侧：占卜表单 / 结果 */}
         <div className="lg:col-span-2 space-y-6">
-          {/* 占卜卡片 */}
           <div className="bg-white rounded-2xl shadow-xl p-6 card-hover">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center space-x-3">
@@ -86,7 +255,7 @@ export default function Home() {
                 </div>
               </div>
               <button
-                onClick={handleNewReading}
+                onClick={handleReset}
                 className="flex items-center space-x-2 text-mystic-600 hover:text-primary-600"
               >
                 <RotateCcw className="w-5 h-5" />
@@ -94,7 +263,20 @@ export default function Home() {
               </button>
             </div>
 
-            {!currentReading ? (
+            {error && (
+              <div className="mb-6 flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <span>{error}</span>
+                <button
+                  onClick={() => setError('')}
+                  className="text-red-400 hover:text-red-600"
+                  aria-label="关闭提示"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {!hasResult ? (
               <form onSubmit={handleSubmit} className="space-y-6">
                 {/* 问题输入 */}
                 <div>
@@ -106,15 +288,14 @@ export default function Home() {
                     onChange={(e) => setQuestion(e.target.value)}
                     placeholder="例如：我最近的工作运势如何？"
                     className="w-full h-32 px-4 py-3 border border-mystic-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
-                    disabled={isLoading}
+                    disabled={isBusy}
                   />
-                  {error && <p className="mt-2 text-red-500 text-sm">{error}</p>}
 
                   {/* 示例问题 */}
                   <div className="mt-4">
                     <p className="text-sm text-mystic-500 mb-2">不知道问什么？试试这些问题：</p>
                     <div className="flex flex-wrap gap-2">
-                      {exampleQuestions.map((q, i) => (
+                      {EXAMPLE_QUESTIONS.map((q, i) => (
                         <button
                           key={i}
                           type="button"
@@ -134,10 +315,7 @@ export default function Home() {
                     选择牌阵
                   </label>
                   <div className="grid grid-cols-2 gap-4">
-                    {[
-                      { id: 'single', name: '单张牌阵', desc: '快速洞察问题核心' },
-                      { id: 'three', name: '三张牌阵', desc: '过去、现在、未来' },
-                    ].map((spread) => (
+                    {SPREADS.map((spread) => (
                       <button
                         key={spread.id}
                         type="button"
@@ -158,13 +336,13 @@ export default function Home() {
                 {/* 提交按钮 */}
                 <button
                   type="submit"
-                  disabled={isLoading}
+                  disabled={isBusy || !ready}
                   className="w-full py-4 bg-gradient-mystic text-white font-semibold rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isLoading ? (
+                  {!ready ? (
                     <div className="flex items-center justify-center space-x-2">
-                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span>正在连接AI进行占卜...</span>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>正在初始化…</span>
                     </div>
                   ) : (
                     '开始占卜'
@@ -172,50 +350,78 @@ export default function Home() {
                 </button>
               </form>
             ) : (
-              // 占卜结果显示
+              // 占卜结果
               <div className="space-y-6">
                 <div className="bg-gradient-to-r from-primary-50 to-mystic-50 p-6 rounded-xl">
-                  <div className="flex items-center justify-between">
-                    <div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
                       <h3 className="text-lg font-semibold text-mystic-900">你的问题</h3>
-                      <p className="text-mystic-700 mt-1">{currentReading.question}</p>
+                      <p className="text-mystic-700 mt-1 break-words">
+                        {displayQuestion || '塔罗占卜'}
+                      </p>
                     </div>
-                    <div className="flex items-center space-x-2 text-mystic-500">
-                      <Clock className="w-5 h-5" />
-                      <span>{new Date(currentReading.created_at).toLocaleString()}</span>
-                    </div>
+                    {reading?.created_at && (
+                      <div className="flex items-center space-x-2 text-mystic-500 shrink-0">
+                        <Clock className="w-5 h-5" />
+                        <span className="text-sm">
+                          {new Date(reading.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 {/* 抽牌结果 */}
-                <div>
-                  <h3 className="text-lg font-semibold text-mystic-900 mb-4">抽牌结果</h3>
-                  <div className="grid gap-6">
-                    {currentReading.cards.map((card, index) => (
-                      <TarotCard
-                        key={index}
-                        card={card}
-                        position={index}
-                        spreadType={currentReading.spread_type}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* AI解读状态 */}
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-blue-100 rounded-lg">
-                      <Sparkles className="w-5 h-5 text-blue-600" />
+                {displayCards.length > 0 ? (
+                  <div>
+                    <h3 className="text-lg font-semibold text-mystic-900 mb-4">抽牌结果</h3>
+                    <div className="grid gap-6">
+                      {displayCards.map((card, index) => (
+                        <TarotCard
+                          key={`${card.card_id ?? 'live'}-${card.position ?? index}`}
+                          card={card}
+                          position={card.position ?? index}
+                          spreadType={displaySpreadType}
+                          readingId={reading?.reading_id ?? null}
+                        />
+                      ))}
                     </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center gap-3 py-10 text-mystic-500">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>正在抽牌…</span>
+                  </div>
+                )}
+
+                {/* 解读进度：牌已抽出、逐张解读进行中 */}
+                {phase === 'drawing' && liveCards.length > 0 && (
+                  <div className="flex items-start gap-3 rounded-xl border border-primary-200 bg-primary-50 p-4">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary-600 flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-medium text-blue-900">AI正在深度解读中...</p>
-                      <p className="text-sm text-blue-700 mt-1">
-                        塔罗牌解读需要一些时间，请耐心等待。解读完成后会自动更新。
+                      <p className="font-medium text-primary-900">牌已抽出，正在逐张解读…</p>
+                      <p className="text-sm text-primary-700 mt-1">
+                        {displaySpreadType === 'three'
+                          ? '三张牌阵需要依次解读三张牌，大约需要 20-40 秒。'
+                          : '大约需要 10-20 秒。'}
                       </p>
                     </div>
                   </div>
-                </div>
+                )}
+
+                {/* 整体解读（流式） */}
+                {streamText && (
+                  <div className="bg-mystic-50 rounded-xl p-6">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Sparkles className="w-5 h-5 text-primary-500" />
+                      <h3 className="text-lg font-semibold text-mystic-900">整体解读</h3>
+                      {isBusy && <Loader2 className="w-4 h-4 animate-spin text-mystic-400" />}
+                    </div>
+                    <div className="text-mystic-700 leading-relaxed">
+                      <Markdown content={streamText} />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -227,23 +433,7 @@ export default function Home() {
           <div className="bg-white rounded-2xl shadow-xl p-6">
             <h3 className="text-lg font-semibold text-mystic-900 mb-4">功能特点</h3>
             <div className="space-y-4">
-              {[
-                {
-                  icon: Sparkles,
-                  title: 'AI智能解读',
-                  desc: '结合牌面含义与用户问题，提供个性化深度解读',
-                },
-                {
-                  icon: Clock,
-                  title: '多种牌阵',
-                  desc: '支持单张、三张等多种经典牌阵选择',
-                },
-                {
-                  icon: Star,
-                  title: '专业准确',
-                  desc: '基于传统塔罗牌知识与现代AI技术',
-                },
-              ].map((feature, i) => (
+              {FEATURES.map((feature, i) => (
                 <div key={i} className="flex items-start space-x-3">
                   <div className="p-2 bg-primary-100 rounded-lg">
                     <feature.icon className="w-5 h-5 text-primary-600" />
@@ -258,7 +448,11 @@ export default function Home() {
           </div>
 
           {/* 占卜历史 */}
-          <ReadingHistory sessionId={sessionId} />
+          <ReadingHistory
+            refreshKey={historyVersion}
+            onSelect={handleSelectHistory}
+            disabled={isBusy}
+          />
         </div>
       </div>
     </div>

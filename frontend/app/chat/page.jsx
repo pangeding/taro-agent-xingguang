@@ -1,50 +1,10 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Menu } from 'lucide-react'
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api/v1'
-
-function SimpleMarkdown({ content }) {
-  if (!content) return null
-
-  const parts = content.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|#{1,3} .+?)(?:\n|$)/g)
-
-  return (
-    <div className="markdown-content">
-      {parts.map((part, i) => {
-        if (part.startsWith('```')) {
-          const code = part.replace(/^```\w*\n?|\n?```$/g, '')
-          return (
-            <pre key={i} className="bg-mystic-800 text-mystic-100 p-3 rounded-lg my-2 overflow-x-auto text-sm">
-              <code>{code}</code>
-            </pre>
-          )
-        }
-        if (part.startsWith('`') && part.endsWith('`')) {
-          return <code key={i} className="bg-mystic-100 text-mystic-800 px-1 py-0.5 rounded text-sm">{part.slice(1, -1)}</code>
-        }
-        if (part.startsWith('**') && part.endsWith('**')) {
-          return <strong key={i} className="font-bold">{part.slice(2, -2)}</strong>
-        }
-        if (part.startsWith('*') && part.endsWith('*') && !part.startsWith('**')) {
-          return <em key={i}>{part.slice(1, -1)}</em>
-        }
-        if (part.startsWith('### ')) {
-          return <h3 key={i} className="text-lg font-bold mt-3 mb-1">{part.slice(4)}</h3>
-        }
-        if (part.startsWith('## ')) {
-          return <h2 key={i} className="text-xl font-bold mt-3 mb-2">{part.slice(3)}</h2>
-        }
-        if (part.startsWith('# ')) {
-          return <h1 key={i} className="text-2xl font-bold mt-3 mb-2">{part.slice(2)}</h1>
-        }
-        return <span key={i}>{part}</span>
-      })}
-    </div>
-  )
-}
+import Markdown from '../../components/Markdown'
+import { API_BASE } from '../../lib/api'
+import { streamSSE } from '../../lib/sse'
 
 function CardStrip({ cards }) {
   if (!cards || !cards.length) return null
@@ -243,77 +203,37 @@ export default function ChatPage() {
       ])
     }
 
+    const handleEvent = (eventName, data) => {
+      if (!data || typeof data !== 'object') return
+      if (eventName === 'error' || data.error) {
+        errorMessage = data.error || '服务出错了'
+        return
+      }
+      if (eventName === 'card_drawn' || (data.name && data.is_reversed !== undefined)) {
+        drawnCards = [...drawnCards, data]
+        setStreamCards(drawnCards)
+        return
+      }
+      if (data.delta) {
+        fullContent += data.delta
+        setStreamContent(fullContent)
+      }
+      if (data.done) {
+        finished = true
+        if (drawnCards.length) {
+          appendAssistant('', 'cards', drawnCards)
+        }
+        appendAssistant(data.full_text || fullContent)
+        loadConversations()
+      }
+    }
+
     try {
-      const response = await fetch(`${API_BASE}/conversations/${conversation.id}/messages`, {
-        method: 'POST',
-        headers: getHeaders(),
-        credentials: 'same-origin',
+      await streamSSE(`/conversations/${conversation.id}/messages`, {
+        body: { content: content.trim() },
         signal: controller.signal,
-        body: JSON.stringify({ content: content.trim() }),
+        onEvent: handleEvent,
       })
-
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '')
-        throw new Error(detail || `请求失败 (${response.status})`)
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      const handleEvent = (eventName, dataStr) => {
-        let data
-        try {
-          data = JSON.parse(dataStr)
-        } catch (e) {
-          return
-        }
-        if (eventName === 'error' || data.error) {
-          errorMessage = data.error || '服务出错了'
-          return
-        }
-        if (eventName === 'card_drawn' || (data.name && data.is_reversed !== undefined)) {
-          drawnCards = [...drawnCards, data]
-          setStreamCards(drawnCards)
-          return
-        }
-        if (data.delta) {
-          fullContent += data.delta
-          setStreamContent(fullContent)
-        }
-        if (data.done) {
-          finished = true
-          if (drawnCards.length) {
-            appendAssistant('', 'cards', drawnCards)
-          }
-          appendAssistant(data.full_text || fullContent)
-          loadConversations()
-        }
-      }
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const blocks = buffer.split('\n\n')
-        buffer = blocks.pop() || ''
-
-        for (const block of blocks) {
-          let eventName = 'message'
-          const dataLines = []
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event:')) {
-              eventName = line.slice(6).trim()
-            } else if (line.startsWith('data:')) {
-              dataLines.push(line.slice(5).replace(/^ /, ''))
-            }
-          }
-          if (dataLines.length) {
-            handleEvent(eventName, dataLines.join('\n'))
-          }
-        }
-      }
     } catch (err) {
       if (err.name === 'AbortError') {
         return
@@ -436,7 +356,7 @@ export default function ChatPage() {
                   : 'bg-white shadow-md text-mystic-800'
               }`}>
               <div className="wysiwyg">
-                <SimpleMarkdown content={msg.content} />
+                <Markdown content={msg.content} />
               </div>
               </div>
             </div>
@@ -453,7 +373,7 @@ export default function ChatPage() {
             <div className="flex justify-start">
               <div className="max-w-2xl p-4 rounded-xl bg-white shadow-md text-mystic-800">
               <div className="wysiwyg">
-                <SimpleMarkdown content={streamContent} />
+                <Markdown content={streamContent} />
               </div>
               </div>
             </div>

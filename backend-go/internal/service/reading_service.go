@@ -20,12 +20,24 @@ type DrawnCard struct {
 }
 
 type ReadingCardResponse struct {
-	CardID       uint    `json:"card_id"`
-	Name         string  `json:"name"`
-	Position     int     `json:"position"`
-	IsReversed   bool    `json:"is_reversed"`
-	Interpretation string `json:"interpretation"`
-	ImageURL     *string `json:"image_url"`
+	CardID         uint    `json:"card_id"`
+	Name           string  `json:"name"`
+	Position       int     `json:"position"`
+	IsReversed     bool    `json:"is_reversed"`
+	Interpretation string  `json:"interpretation"`
+	ImageURL       *string `json:"image_url"`
+
+	// 牌面本身的信息（此前只在 GET /cards/:id 的 CardDetail 中返回，
+	// 导致占卜结果页只能显示与具体牌无关的模板文案）。仅新增字段，不改既有字段。
+	ArcanaType      string  `json:"arcana_type"`
+	Suit            *string `json:"suit"`
+	Number          *int    `json:"number"`
+	Keywords        string  `json:"keywords"`
+	Element         *string `json:"element"`
+	ZodiacSign      *string `json:"zodiac_sign"`
+	MeaningUpright  string  `json:"meaning_upright"`
+	MeaningReversed string  `json:"meaning_reversed"`
+	Description     string  `json:"description"`
 }
 
 type ReadingResult struct {
@@ -88,7 +100,20 @@ func (s *ReadingService) DrawCards(count int) ([]DrawnCard, error) {
 	return result, nil
 }
 
+// CreateReading 自行抽牌后解读。
 func (s *ReadingService) CreateReading(question, spreadType string, sessionID *string) (*ReadingResult, error) {
+	drawnCards, err := s.DrawCards(cardCount(spreadType))
+	if err != nil {
+		return nil, err
+	}
+	return s.CreateReadingWithCards(question, spreadType, sessionID, drawnCards)
+}
+
+// CreateReadingWithCards 用调用方给定的牌生成解读。
+//
+// 流式占卜（StreamTarotReading）需要先把抽到的牌推给前端、再解读，
+// 若此处再次抽牌，就会出现「推给前端的牌」与「实际解读的牌」不是同一副的错位。
+func (s *ReadingService) CreateReadingWithCards(question, spreadType string, sessionID *string, drawnCards []DrawnCard) (*ReadingResult, error) {
 	sid := uuid.New().String()
 	if sessionID != nil && *sessionID != "" {
 		sid = *sessionID
@@ -96,12 +121,6 @@ func (s *ReadingService) CreateReading(question, spreadType string, sessionID *s
 
 	reading := db.Reading{SessionID: sid, Question: question, SpreadType: spreadType}
 	s.DB.Create(&reading)
-
-	count := cardCount(spreadType)
-	drawnCards, err := s.DrawCards(count)
-	if err != nil {
-		return nil, err
-	}
 
 	readingCardIDs := make([]uint, len(drawnCards))
 	for i, dc := range drawnCards {
@@ -149,7 +168,18 @@ func (s *ReadingService) CreateReading(question, spreadType string, sessionID *s
 	return s.GetReadingByID(reading.ID)
 }
 
+// CreateReadingLangGraph 自行抽牌后走 Eino 图解读（三张牌阵会额外生成综合解读）。
 func (s *ReadingService) CreateReadingLangGraph(question, spreadType string, sessionID, modelName *string) (*ReadingResult, error) {
+	drawnCards, err := s.DrawCards(cardCount(spreadType))
+	if err != nil {
+		return nil, err
+	}
+	return s.CreateReadingLangGraphWithCards(question, spreadType, sessionID, modelName, drawnCards)
+}
+
+// CreateReadingLangGraphWithCards 用调用方给定的牌走 Eino 图解读。
+// 理由同 CreateReadingWithCards。
+func (s *ReadingService) CreateReadingLangGraphWithCards(question, spreadType string, sessionID, modelName *string, drawnCards []DrawnCard) (*ReadingResult, error) {
 	sid := uuid.New().String()
 	if sessionID != nil && *sessionID != "" {
 		sid = *sessionID
@@ -157,12 +187,6 @@ func (s *ReadingService) CreateReadingLangGraph(question, spreadType string, ses
 
 	reading := db.Reading{SessionID: sid, Question: question, SpreadType: spreadType}
 	s.DB.Create(&reading)
-
-	count := cardCount(spreadType)
-	drawnCards, err := s.DrawCards(count)
-	if err != nil {
-		return nil, err
-	}
 
 	readingCards := make([]db.ReadingCard, len(drawnCards))
 	for i, dc := range drawnCards {
@@ -252,12 +276,22 @@ func (s *ReadingService) GetReadingByID(id uint) (*ReadingResult, error) {
 	cards := make([]ReadingCardResponse, len(reading.Cards))
 	for i, rc := range reading.Cards {
 		cards[i] = ReadingCardResponse{
-			CardID:       rc.CardID,
-			Name:         rc.Card.Name,
-			Position:     rc.Position,
-			IsReversed:   rc.IsReversed,
+			CardID:         rc.CardID,
+			Name:           rc.Card.Name,
+			Position:       rc.Position,
+			IsReversed:     rc.IsReversed,
 			Interpretation: rc.Interpretation,
-			ImageURL:     rc.Card.ImageURL,
+			ImageURL:       rc.Card.ImageURL,
+
+			ArcanaType:      rc.Card.ArcanaType,
+			Suit:            rc.Card.Suit,
+			Number:          rc.Card.Number,
+			Keywords:        rc.Card.Keywords,
+			Element:         rc.Card.Element,
+			ZodiacSign:      rc.Card.ZodiacSign,
+			MeaningUpright:  rc.Card.MeaningUpright,
+			MeaningReversed: rc.Card.MeaningReversed,
+			Description:     rc.Card.Description,
 		}
 	}
 
