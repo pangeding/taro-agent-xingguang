@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Trash2, Menu } from 'lucide-react'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api/v1'
 
 function SimpleMarkdown({ content }) {
   if (!content) return null
@@ -46,8 +46,27 @@ function SimpleMarkdown({ content }) {
   )
 }
 
+function CardStrip({ cards }) {
+  if (!cards || !cards.length) return null
+  return (
+    <div className="flex flex-wrap gap-2">
+      {cards.map((c, i) => (
+        <div
+          key={i}
+          className="flex flex-col items-center bg-mystic-800 text-mystic-50 rounded-lg px-3 py-2 min-w-[72px] shadow"
+        >
+          <span className="text-lg">🎴</span>
+          <span className="text-sm font-semibold">{c.name}</span>
+          <span className="text-xs opacity-80">{c.is_reversed ? '逆位' : '正位'}</span>
+          {c.position_name ? <span className="text-[10px] opacity-60">{c.position_name}</span> : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function ChatPage() {
-  const [userId, setUserId] = useState(null)
+  const [ready, setReady] = useState(false)
   const [conversations, setConversations] = useState([])
   const [currentConversation, setCurrentConversation] = useState(null)
   const [messages, setMessages] = useState([])
@@ -55,12 +74,15 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
+  const [streamCards, setStreamCards] = useState([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [error, setError] = useState('')
   const messagesEndRef = useRef(null)
   const abortControllerRef = useRef(null)
 
   useEffect(() => {
     initUser()
+    return () => abortControllerRef.current?.abort()
   }, [])
 
   useEffect(() => {
@@ -68,10 +90,17 @@ export default function ChatPage() {
   }, [messages, streamContent])
 
   useEffect(() => {
-    if (userId) {
-      loadConversations()
+    if (!ready) return
+    const bootstrap = async () => {
+      const list = await loadConversations()
+      if (list && list.length > 0) {
+        loadConversation(list[0].id)
+      } else {
+        createConversation()
+      }
     }
-  }, [userId])
+    bootstrap()
+  }, [ready])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -79,37 +108,36 @@ export default function ChatPage() {
 
   const getHeaders = () => ({
     'Content-Type': 'application/json',
-    'X-User-Id': userId || '',
   })
 
   const initUser = async () => {
-    let storedId = localStorage.getItem('user_id')
-    if (!storedId) {
-      try {
-        const res = await fetch(`${API_BASE}/user/init`, { method: 'POST' })
-        const data = await res.json()
-        storedId = data.user_id
-        localStorage.setItem('user_id', storedId)
-        document.cookie = `user_id=${storedId}; max-age=31536000; path=/`
-      } catch (err) {
-        console.error('Failed to init user:', err)
-        return
-      }
+    try {
+      const res = await fetch(`${API_BASE}/user/init`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      })
+      if (!res.ok) throw new Error(`初始化用户失败 (${res.status})`)
+      setReady(true)
+    } catch (err) {
+      console.error('Failed to init user:', err)
+      setError('无法连接到服务，请确认后端已启动后刷新页面。')
     }
-    setUserId(storedId)
   }
 
   const loadConversations = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations/`, {
+      const res = await fetch(`${API_BASE}/conversations`, {
         headers: getHeaders(),
+        credentials: 'same-origin',
       })
-      if (res.ok) {
-        const data = await res.json()
-        setConversations(data)
-      }
+      if (!res.ok) throw new Error(`加载会话失败 (${res.status})`)
+      const data = await res.json()
+      setConversations(data)
+      return data
     } catch (err) {
       console.error('Failed to load conversations:', err)
+      setError('加载会话列表失败，请稍后重试。')
+      return null
     }
   }
 
@@ -117,6 +145,7 @@ export default function ChatPage() {
     try {
       const res = await fetch(`${API_BASE}/conversations/${id}`, {
         headers: getHeaders(),
+        credentials: 'same-origin',
       })
       if (res.ok) {
         const data = await res.json()
@@ -130,19 +159,23 @@ export default function ChatPage() {
 
   const createConversation = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations/`, {
+      const res = await fetch(`${API_BASE}/conversations`, {
         method: 'POST',
         headers: getHeaders(),
+        credentials: 'same-origin',
         body: JSON.stringify({}),
       })
-      if (res.ok) {
-        const data = await res.json()
-        loadConversations()
-        setCurrentConversation(data)
-        setMessages([])
-      }
+      if (!res.ok) throw new Error(`创建会话失败 (${res.status})`)
+      const data = await res.json()
+      setConversations((prev) => [data, ...prev])
+      setCurrentConversation(data)
+      setMessages([])
+      setError('')
+      return data
     } catch (err) {
       console.error('Failed to create conversation:', err)
+      setError('创建会话失败，请稍后重试。')
+      return null
     }
   }
 
@@ -151,6 +184,7 @@ export default function ChatPage() {
       const res = await fetch(`${API_BASE}/conversations/${id}`, {
         method: 'DELETE',
         headers: getHeaders(),
+        credentials: 'same-origin',
       })
       if (res.ok) {
         if (currentConversation?.id === id) {
@@ -165,7 +199,13 @@ export default function ChatPage() {
   }
 
   const sendMessage = async (content) => {
-    if (!currentConversation || !content.trim() || isStreaming) return
+    if (!content.trim() || isStreaming) return
+
+    let conversation = currentConversation
+    if (!conversation) {
+      conversation = await createConversation()
+      if (!conversation) return
+    }
 
     const userMessage = {
       id: Date.now(),
@@ -178,71 +218,118 @@ export default function ChatPage() {
     setInput('')
     setIsStreaming(true)
     setStreamContent('')
+    setError('')
+
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    let fullContent = ''
+    let finished = false
+    let errorMessage = null
+    let drawnCards = []
+
+    const appendAssistant = (text, type = 'text', cards = null) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + Math.random(),
+          role: 'assistant',
+          content: text,
+          type,
+          cards: cards || undefined,
+          created_at: new Date().toISOString(),
+        },
+      ])
+    }
 
     try {
-      const response = await fetch(`${API_BASE}/conversations/${currentConversation.id}/messages`, {
+      const response = await fetch(`${API_BASE}/conversations/${conversation.id}/messages`, {
         method: 'POST',
         headers: getHeaders(),
+        credentials: 'same-origin',
+        signal: controller.signal,
         body: JSON.stringify({ content: content.trim() }),
       })
 
-      if (!response.ok) throw new Error('Failed to send message')
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        throw new Error(detail || `请求失败 (${response.status})`)
+      }
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let fullContent = ''
+
+      const handleEvent = (eventName, dataStr) => {
+        let data
+        try {
+          data = JSON.parse(dataStr)
+        } catch (e) {
+          return
+        }
+        if (eventName === 'error' || data.error) {
+          errorMessage = data.error || '服务出错了'
+          return
+        }
+        if (eventName === 'card_drawn' || (data.name && data.is_reversed !== undefined)) {
+          drawnCards = [...drawnCards, data]
+          setStreamCards(drawnCards)
+          return
+        }
+        if (data.delta) {
+          fullContent += data.delta
+          setStreamContent(fullContent)
+        }
+        if (data.done) {
+          finished = true
+          if (drawnCards.length) {
+            appendAssistant('', 'cards', drawnCards)
+          }
+          appendAssistant(data.full_text || fullContent)
+          loadConversations()
+        }
+      }
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
         buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
+        const blocks = buffer.split('\n\n')
+        buffer = blocks.pop() || ''
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6)
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.delta) {
-                fullContent += data.delta
-                setStreamContent(fullContent)
-              }
-              if (data.done) {
-                const assistantMessage = {
-                  id: Date.now(),
-                  role: 'assistant',
-                  content: data.full_text || fullContent,
-                  type: 'text',
-                  created_at: new Date().toISOString(),
-                }
-                setMessages((prev) => [...prev, assistantMessage])
-                setStreamContent('')
-                setIsStreaming(false)
-                loadConversations()
-              }
-            } catch (e) {
-              // ignore JSON parse errors
+        for (const block of blocks) {
+          let eventName = 'message'
+          const dataLines = []
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) {
+              eventName = line.slice(6).trim()
+            } else if (line.startsWith('data:')) {
+              dataLines.push(line.slice(5).replace(/^ /, ''))
             }
+          }
+          if (dataLines.length) {
+            handleEvent(eventName, dataLines.join('\n'))
           }
         }
       }
     } catch (err) {
+      if (err.name === 'AbortError') {
+        return
+      }
       console.error('Stream error:', err)
+      errorMessage = err.message || '回复出现错误，请重试。'
+    } finally {
+      if (errorMessage) {
+        if (fullContent) appendAssistant(fullContent)
+        appendAssistant(`抱歉，${errorMessage}`)
+      } else if (!finished && fullContent) {
+        appendAssistant(fullContent)
+      }
       setIsStreaming(false)
       setStreamContent('')
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          role: 'assistant',
-          content: '抱歉，回复出现错误，请重试。',
-          type: 'text',
-          created_at: new Date().toISOString(),
-        },
-      ])
+      setStreamCards([])
     }
   }
 
@@ -258,7 +345,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-screen bg-mystic-50">
+    <div className="flex h-[calc(100vh-8rem)] bg-mystic-50 rounded-xl overflow-hidden border border-mystic-200">
       {/* 侧边栏 */}
       {sidebarOpen && (
         <div className="w-64 bg-white border-r border-mystic-200 flex flex-col">
@@ -311,6 +398,15 @@ export default function ChatPage() {
 
         {/* 消息列表 */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {error && (
+            <div className="flex items-start justify-between gap-3 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-2 rounded-lg">
+              <span>{error}</span>
+              <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">
+                ✕
+              </button>
+            </div>
+          )}
+
           {messages.length === 0 && !isStreaming && (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="text-6xl mb-4">🔮</div>
@@ -321,7 +417,15 @@ export default function ChatPage() {
             </div>
           )}
 
-          {messages.map((msg) => (
+          {messages.map((msg) => {
+            if (msg.type === 'cards') {
+              return (
+                <div key={msg.id} className="flex justify-start">
+                  <CardStrip cards={msg.cards} />
+                </div>
+              )
+            }
+            return (
             <div
               key={msg.id}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -336,7 +440,14 @@ export default function ChatPage() {
               </div>
               </div>
             </div>
-          ))}
+            )
+          })}
+
+          {isStreaming && streamCards.length > 0 && (
+            <div className="flex justify-start">
+              <CardStrip cards={streamCards} />
+            </div>
+          )}
 
           {isStreaming && streamContent && (
             <div className="flex justify-start">
@@ -359,13 +470,13 @@ export default function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="输入你的问题... (Enter发送, Shift+Enter换行)"
-              disabled={isStreaming || !currentConversation}
+              disabled={isStreaming}
               className="flex-1 px-4 py-3 border border-mystic-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
               rows={1}
             />
             <button
               onClick={handleSend}
-              disabled={isStreaming || !input.trim() || !currentConversation}
+              disabled={isStreaming || !input.trim()}
               className="px-6 py-3 bg-gradient-mystic text-white font-semibold rounded-xl hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               发送

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"backend-go/internal/agent"
@@ -10,6 +11,7 @@ import (
 	"backend-go/internal/middleware"
 	"backend-go/internal/service"
 
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/gin-gonic/gin"
 )
@@ -41,20 +43,41 @@ func main() {
 	conversationService := service.NewConversationService(d)
 	conversationService.SetLLM(llm)
 
+	if llm != nil {
+		drawTool, err := service.NewTarotDrawTool(readingService)
+		if err != nil {
+			log.Printf("Warning: failed to create draw_tarot tool: %v", err)
+		} else {
+			chatAgent, err := agent.NewChatAgent(context.Background(), agent.ChatAgentConfig{
+				Name:             "tarot-chat",
+				APIKey:           cfg.DashScopeAPIKey,
+				BaseURL:          cfg.DashScopeBaseURL,
+				Model:            cfg.DashScopeModel,
+				Instruction:      agent.CHAT_SYSTEM_PROMPT,
+				MaxIterations:    8,
+				Temperature:      0.7,
+				FrequencyPenalty: 0.4,
+				PresencePenalty:  0.2,
+			}, []tool.BaseTool{drawTool})
+			if err != nil {
+				log.Printf("Warning: failed to create chat agent: %v", err)
+			} else {
+				conversationService.SetAgent(chatAgent)
+			}
+		}
+	}
+
 	r := gin.Default()
 	r.Use(middleware.CORS(cfg.BackendCORSOrigins))
 
 	r.GET("/", handler.Root(cfg))
 	r.GET("/health", handler.HealthCheck)
 
-	user := r.Group(cfg.APIV1Str + "/user")
-	{
-		user.POST("/init", handler.InitUser())
-	}
-
 	v1 := r.Group(cfg.APIV1Str)
 	v1.Use(middleware.UserID())
 	{
+		v1.POST("/user/init", handler.InitUser())
+
 		cards := v1.Group("/cards")
 		cards.GET("/", handler.GETAllCards(cardService))
 		cards.GET("/:id", handler.GetCard(cardService))
@@ -68,8 +91,8 @@ func main() {
 
 		conversations := v1.Group("/conversations")
 		{
-			conversations.POST("/", handler.CreateConversation(conversationService))
-			conversations.GET("/", handler.ListConversations(conversationService))
+			conversations.POST("", handler.CreateConversation(conversationService))
+			conversations.GET("", handler.ListConversations(conversationService))
 			conversations.GET("/:id", handler.GetConversation(conversationService))
 			conversations.DELETE("/:id", handler.DeleteConversation(conversationService))
 			conversations.PATCH("/:id/title", handler.UpdateConversationTitle(conversationService))
