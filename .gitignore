@@ -11,4 +11,4 @@ node_modules/
 
 
 # go output
-server
+backend-go/server
