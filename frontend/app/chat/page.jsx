@@ -86,7 +86,8 @@ export default function ChatPage() {
 
   const loadConversations = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations`, {
+      // 只列 chat 频道：占卜页写入的 reading 会话不应出现在聊天侧边栏
+      const res = await fetch(`${API_BASE}/conversations?channel=chat`, {
         headers: getHeaders(),
         credentials: 'same-origin',
       })
@@ -123,7 +124,7 @@ export default function ChatPage() {
         method: 'POST',
         headers: getHeaders(),
         credentials: 'same-origin',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ channel: 'chat' }),
       })
       if (!res.ok) throw new Error(`创建会话失败 (${res.status})`)
       const data = await res.json()

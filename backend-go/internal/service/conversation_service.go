@@ -24,6 +24,100 @@ type ConversationService struct {
 	MsgID uint
 }
 
+// 会话频道：区分会话属于哪个功能，避免占卜记录混进聊天页。
+const (
+	ChannelChat    = "chat"
+	ChannelReading = "reading"
+)
+
+func normalizeChannel(channel string) string {
+	if channel == ChannelReading {
+		return ChannelReading
+	}
+	return ChannelChat
+}
+
+// CardBrief 是挂在会话消息上的牌面摘要，供前端渲染牌条。
+type CardBrief struct {
+	Name         string `json:"name"`
+	IsReversed   bool   `json:"is_reversed"`
+	Position     int    `json:"position"`
+	PositionName string `json:"position_name,omitempty"`
+	ImageURL     string `json:"image_url,omitempty"`
+}
+
+// MessageDetail 是消息 + 该消息关联占卜记录（reading_id）的牌面。
+// 没有 reading_id 的消息 Cards 为 nil，序列化后不出现 cards 字段。
+type MessageDetail struct {
+	db.Message
+	Cards []CardBrief `json:"cards,omitempty"`
+}
+
+// DecorateMessages 批量补全消息上的牌面信息。
+// 一次性取回所有相关 readings / reading_cards / tarot_cards，避免 N+1 查询。
+func (s *ConversationService) DecorateMessages(msgs []db.Message) []MessageDetail {
+	out := make([]MessageDetail, len(msgs))
+	seen := make(map[uint]bool, len(msgs))
+	readingIDs := make([]uint, 0, len(msgs))
+
+	for i, m := range msgs {
+		out[i] = MessageDetail{Message: m}
+		if m.ReadingID != nil && !seen[*m.ReadingID] {
+			seen[*m.ReadingID] = true
+			readingIDs = append(readingIDs, *m.ReadingID)
+		}
+	}
+	if len(readingIDs) == 0 {
+		return out
+	}
+
+	var readings []db.Reading
+	s.DB.Where("id IN ?", readingIDs).Find(&readings)
+	spreadOf := make(map[uint]string, len(readings))
+	for _, r := range readings {
+		spreadOf[r.ID] = r.SpreadType
+	}
+
+	var rcs []db.ReadingCard
+	s.DB.Where("reading_id IN ?", readingIDs).Order("position ASC").Find(&rcs)
+
+	cardIDs := make([]uint, 0, len(rcs))
+	for _, rc := range rcs {
+		cardIDs = append(cardIDs, rc.CardID)
+	}
+
+	cardsByID := make(map[uint]db.TarotCard, len(cardIDs))
+	if len(cardIDs) > 0 {
+		var cards []db.TarotCard
+		s.DB.Where("id IN ?", cardIDs).Find(&cards)
+		for _, c := range cards {
+			cardsByID[c.ID] = c
+		}
+	}
+
+	byReading := make(map[uint][]CardBrief, len(readingIDs))
+	for _, rc := range rcs {
+		card := cardsByID[rc.CardID]
+		brief := CardBrief{
+			Name:         card.Name,
+			IsReversed:   rc.IsReversed,
+			Position:     rc.Position,
+			PositionName: positionName(rc.Position, spreadOf[rc.ReadingID]),
+		}
+		if card.ImageURL != nil {
+			brief.ImageURL = *card.ImageURL
+		}
+		byReading[rc.ReadingID] = append(byReading[rc.ReadingID], brief)
+	}
+
+	for i := range out {
+		if out[i].ReadingID != nil {
+			out[i].Cards = byReading[*out[i].ReadingID]
+		}
+	}
+	return out
+}
+
 func NewConversationService(d *gorm.DB) *ConversationService {
 	return &ConversationService{DB: d}
 }
@@ -76,6 +170,9 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 	iter := runner.Run(runCtx, history)
 
 	var fullContent strings.Builder
+	// draw_tarot 产生的占卜记录 id，写到 assistant 消息上，
+	// 前端刷新后才能凭 reading_id 还原牌面。
+	var readingID uint
 	for {
 		ev, ok := iter.Next()
 		if !ok {
@@ -115,7 +212,9 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 				return err
 			}
 			if toolMsg != nil && mo.ToolName == "draw_tarot" {
-				emitCardDrawn(writer, toolMsg.Content)
+				if id := emitCardDrawn(writer, toolMsg.Content); id != 0 {
+					readingID = id
+				}
 			}
 		}
 	}
@@ -125,7 +224,10 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 	if err != nil {
 		return err
 	}
-	writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "msg_id": %d}`, toRawJSON(text), assistantMsg.ID))
+	if readingID != 0 {
+		s.DB.Model(&db.Message{}).Where("id = ?", assistantMsg.ID).Update("reading_id", readingID)
+	}
+	writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "reading_id": %d, "msg_id": %d}`, toRawJSON(text), readingID, assistantMsg.ID))
 
 	if count, err := s.GetMessageCount(conversationID); err == nil && int(count) == 2 {
 		s.GenerateTitleAsync(conversationID)
@@ -134,11 +236,12 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 	return nil
 }
 
-// emitCardDrawn 把 draw_tarot 工具返回的真实牌面转成 SSE card_drawn 事件。
-func emitCardDrawn(writer func(event string, data string), toolResultJSON string) {
+// emitCardDrawn 把 draw_tarot 工具返回的真实牌面转成 SSE card_drawn 事件，
+// 返回该次抽牌对应的 reading id（解析失败返回 0）。
+func emitCardDrawn(writer func(event string, data string), toolResultJSON string) uint {
 	var out DrawTarotOutput
 	if err := json.Unmarshal([]byte(toolResultJSON), &out); err != nil {
-		return
+		return 0
 	}
 	for _, c := range out.Cards {
 		writer("card_drawn", toRawJSON(map[string]any{
@@ -150,6 +253,7 @@ func emitCardDrawn(writer func(event string, data string), toolResultJSON string
 			"image_url":     c.ImageURL,
 		}))
 	}
+	return out.ReadingID
 }
 
 func toRawJSON(v any) string {
@@ -157,21 +261,29 @@ func toRawJSON(v any) string {
 	return string(b)
 }
 
-func (s *ConversationService) CreateConversation(userID string) (*db.Conversation, error) {
+func (s *ConversationService) CreateConversation(userID, channel string) (*db.Conversation, error) {
 	if userID == "" {
 		return nil, errors.New("user_id is required")
 	}
 
-	conv := db.Conversation{UserID: userID, Title: "新对话"}
+	conv := db.Conversation{UserID: userID, Title: "新对话", Channel: normalizeChannel(channel)}
 	if err := s.DB.Create(&conv).Error; err != nil {
 		return nil, err
 	}
 	return &conv, nil
 }
 
-func (s *ConversationService) ListConversations(userID string) ([]db.Conversation, error) {
+// ListConversations 按 channel 过滤。
+// channel 为空时只返回 chat 频道（保持「不传参数 = 聊天」的直觉），
+// channel 为 "all" 时不过滤。
+func (s *ConversationService) ListConversations(userID, channel string) ([]db.Conversation, error) {
+	q := s.DB.Where("user_id = ?", userID)
+	if channel != "all" {
+		q = q.Where("channel = ?", normalizeChannel(channel))
+	}
+
 	var conversations []db.Conversation
-	err := s.DB.Where("user_id = ?", userID).Order("updated_at DESC").Find(&conversations).Error
+	err := q.Order("updated_at DESC").Find(&conversations).Error
 	return conversations, err
 }
 

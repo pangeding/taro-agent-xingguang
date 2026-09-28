@@ -56,3 +56,20 @@ func maskDSN(dsn string) string {
 func AutoMigrate(db *gorm.DB) {
 	db.AutoMigrate(&TarotCard{}, &Reading{}, &ReadingCard{}, &Feedback{}, &Conversation{}, &Message{})
 }
+
+// BackfillConversationChannel 把历史上由占卜页写入的会话标记为 reading 频道，
+// 使其不再出现在聊天页的会话列表里。
+//
+// 判定规则：只有 type='reading' 消息、没有任何 type='text' 消息的会话，
+// 一定是占卜页 StreamTarotReading 写出来的（它只写 type='reading'）；
+// 聊天页 StreamChat 写出的消息一律是 type='text'。幂等，可重复执行。
+func BackfillConversationChannel(gdb *gorm.DB) {
+	const q = `UPDATE conversations SET channel = 'reading'
+WHERE channel <> 'reading'
+  AND id IN (SELECT DISTINCT conversation_id FROM messages WHERE type = 'reading')
+  AND id NOT IN (SELECT DISTINCT conversation_id FROM messages WHERE type = 'text')`
+
+	if err := gdb.Exec(q).Error; err != nil {
+		log.Printf("backfill conversation channel failed: %v", err)
+	}
+}

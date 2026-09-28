@@ -2,6 +2,7 @@ package handler
 
 import (
 	"strconv"
+	"time"
 
 	"backend-go/internal/service"
 
@@ -12,7 +13,13 @@ func CreateConversation(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.GetString("user_id")
 
-		conv, err := svc.CreateConversation(userID)
+		// channel 可选；缺省或非法值都会落到 chat
+		var req struct {
+			Channel string `json:"channel"`
+		}
+		_ = c.ShouldBindJSON(&req)
+
+		conv, err := svc.CreateConversation(userID, req.Channel)
 		if err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
@@ -21,20 +28,22 @@ func CreateConversation(svc *service.ConversationService) gin.HandlerFunc {
 	}
 }
 
+// ListConversations 支持 ?channel=chat|reading|all，缺省只返回 chat。
 func ListConversations(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.GetString("user_id")
 
-		conversations, err := svc.ListConversations(userID)
+		conversations, err := svc.ListConversations(userID, c.Query("channel"))
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 
 		type ConvSummary struct {
-			ID        uint      `json:"id"`
-			Title     string    `json:"title"`
-			UpdatedAt string    `json:"updated_at"`
+			ID        uint   `json:"id"`
+			Title     string `json:"title"`
+			Channel   string `json:"channel"`
+			UpdatedAt string `json:"updated_at"`
 		}
 
 		summaries := make([]ConvSummary, len(conversations))
@@ -42,12 +51,25 @@ func ListConversations(svc *service.ConversationService) gin.HandlerFunc {
 			summaries[i] = ConvSummary{
 				ID:        conv.ID,
 				Title:     conv.Title,
+				Channel:   conv.Channel,
 				UpdatedAt: conv.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 			}
 		}
 
 		c.JSON(200, summaries)
 	}
+}
+
+// ConversationDetail 是会话详情的响应体。
+// 消息上附带 cards（由 messages.reading_id 反查），前端刷新后据此还原牌面。
+type ConversationDetail struct {
+	ID        uint                    `json:"id"`
+	UserID    string                  `json:"user_id"`
+	Title     string                  `json:"title"`
+	Channel   string                  `json:"channel"`
+	CreatedAt time.Time               `json:"created_at"`
+	UpdatedAt time.Time               `json:"updated_at"`
+	Messages  []service.MessageDetail `json:"messages"`
 }
 
 func GetConversation(svc *service.ConversationService) gin.HandlerFunc {
@@ -65,7 +87,16 @@ func GetConversation(svc *service.ConversationService) gin.HandlerFunc {
 			c.JSON(404, gin.H{"error": "conversation not found"})
 			return
 		}
-		c.JSON(200, conv)
+
+		c.JSON(200, ConversationDetail{
+			ID:        conv.ID,
+			UserID:    conv.UserID,
+			Title:     conv.Title,
+			Channel:   conv.Channel,
+			CreatedAt: conv.CreatedAt,
+			UpdatedAt: conv.UpdatedAt,
+			Messages:  svc.DecorateMessages(conv.Messages),
+		})
 	}
 }
 
@@ -133,6 +164,6 @@ func GetMessages(svc *service.ConversationService) gin.HandlerFunc {
 			c.JSON(404, gin.H{"error": "conversation not found"})
 			return
 		}
-		c.JSON(200, messages)
+		c.JSON(200, svc.DecorateMessages(messages))
 	}
 }

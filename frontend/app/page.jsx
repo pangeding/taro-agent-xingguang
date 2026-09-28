@@ -59,14 +59,14 @@ export default function Home() {
   const isBusy = phase === 'drawing' || phase === 'streaming'
   const hasResult = Boolean(reading) || liveCards.length > 0 || isBusy || Boolean(streamText)
 
-  // 初始化：建立用户身份，并复用最近一个会话
+  // 初始化：建立用户身份，并复用最近一个「占卜」频道会话
   useEffect(() => {
     let cancelled = false
 
     ;(async () => {
       try {
         await apiFetch('/user/init', { method: 'POST' })
-        const list = await apiFetch('/conversations')
+        const list = await apiFetch('/conversations?channel=reading')
         if (!cancelled && Array.isArray(list) && list.length > 0) {
           setConversationId(list[0].id)
         }
@@ -91,7 +91,7 @@ export default function Home() {
     if (conversationId) return conversationId
     const conv = await apiFetch('/conversations', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ channel: 'reading' }),
     })
     if (!conv?.id) throw new Error('创建会话失败')
     setConversationId(conv.id)

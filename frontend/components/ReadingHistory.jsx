@@ -65,7 +65,7 @@ export default function ReadingHistory({ refreshKey = 0, onSelect, disabled = fa
     setIsLoading(true)
     setError('')
     try {
-      const conversations = await apiFetch('/conversations')
+      const conversations = await apiFetch('/conversations?channel=reading')
       const recent = (conversations || []).slice(0, MAX_CONVERSATIONS)
 
       const batches = await Promise.all(

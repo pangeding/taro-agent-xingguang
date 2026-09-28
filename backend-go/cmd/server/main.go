@@ -23,6 +23,7 @@ func main() {
 	log.Printf("database driver: %s", driver)
 	d := db.Init(driver, dsn)
 	db.AutoMigrate(d)
+	db.BackfillConversationChannel(d)
 
 	var llm *agent.ChatClient
 	var graph compose.Runnable[*agent.ReadingState, *agent.ReadingState]
