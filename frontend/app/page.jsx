@@ -134,6 +134,19 @@ export default function Home() {
             return
           }
 
+          // 逐张解读完成：立刻填进对应的牌面卡片，不必等综合解读。
+          // 必须放在 card_drawn 之前判断——两者都带 name/is_reversed，
+          // 否则会被下面的抽牌分支当成新抽的牌重复追加。
+          if (event === 'card_interpreted' || data.interpretation !== undefined) {
+            const pos = data.position ?? -1
+            setLiveCards((prev) =>
+              prev.map((c, i) =>
+                (c.position ?? i) === pos ? { ...c, interpretation: data.interpretation } : c,
+              ),
+            )
+            return
+          }
+
           // 逐张抽牌：立即渲染，不等解读完成
           if (
             event === 'card_drawn' ||
@@ -212,7 +225,11 @@ export default function Home() {
 
     try {
       const full = await apiFetch(`/readings/${entry.readingId}`)
-      if (full) setReading(full)
+      if (full) {
+        setReading(full)
+        // 三张牌阵：用落库的综合解读覆盖列表里的预览文本
+        if (full.synthesis) setStreamText(full.synthesis)
+      }
     } catch (err) {
       setError(`加载该占卜记录失败：${err.message}`)
     }
@@ -223,6 +240,19 @@ export default function Home() {
     : liveCards.map((c, i) => ({ ...c, position: c.position ?? i }))
   const displaySpreadType = reading?.spread_type || spreadType
   const displayQuestion = reading?.question || question
+
+  // single 牌阵的流式文本就是这张牌的解读本身：
+  // 落库后 reading.cards[0].interpretation 与流式文本是同一段内容，
+  // 因此只在牌面还没有解读时用它填充，避免同一段文字渲染两遍。
+  const cardsForDisplay = displayCards.map((c) =>
+    displaySpreadType === 'single' && !c.interpretation && streamText
+      ? { ...c, interpretation: streamText }
+      : c,
+  )
+
+  // 只有 three 牌阵才有独立于逐牌解读的综合解读
+  const showSynthesis = Boolean(streamText) && displaySpreadType === 'three'
+  const interpretedCount = cardsForDisplay.filter((c) => c.interpretation).length
 
   return (
     <div className="space-y-8">
@@ -376,7 +406,7 @@ export default function Home() {
                   <div>
                     <h3 className="text-lg font-semibold text-mystic-900 mb-4">抽牌结果</h3>
                     <div className="grid gap-6">
-                      {displayCards.map((card, index) => (
+                      {cardsForDisplay.map((card, index) => (
                         <TarotCard
                           key={`${card.card_id ?? 'live'}-${card.position ?? index}`}
                           card={card}
@@ -394,27 +424,27 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* 解读进度：牌已抽出、逐张解读进行中 */}
-                {phase === 'drawing' && liveCards.length > 0 && (
+                {/* 解读进度：三张牌阵逐张推送，每张完成即显示在对应卡片里 */}
+                {phase === 'drawing' && liveCards.length > 0 && displaySpreadType === 'three' && (
                   <div className="flex items-start gap-3 rounded-xl border border-primary-200 bg-primary-50 p-4">
                     <Loader2 className="w-5 h-5 animate-spin text-primary-600 flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-medium text-primary-900">牌已抽出，正在逐张解读…</p>
+                      <p className="font-medium text-primary-900">
+                        正在逐张解读…（已完成 {interpretedCount}/{cardsForDisplay.length} 张）
+                      </p>
                       <p className="text-sm text-primary-700 mt-1">
-                        {displaySpreadType === 'three'
-                          ? '三张牌阵需要依次解读三张牌，大约需要 20-40 秒。'
-                          : '大约需要 10-20 秒。'}
+                        每张牌解读完成会立即显示在上方对应的牌面卡片里。
                       </p>
                     </div>
                   </div>
                 )}
 
-                {/* 整体解读（流式） */}
-                {streamText && (
+                {/* 综合解读（流式，仅三张牌阵） */}
+                {showSynthesis && (
                   <div className="bg-mystic-50 rounded-xl p-6">
                     <div className="flex items-center gap-2 mb-3">
                       <Sparkles className="w-5 h-5 text-primary-500" />
-                      <h3 className="text-lg font-semibold text-mystic-900">整体解读</h3>
+                      <h3 className="text-lg font-semibold text-mystic-900">综合解读</h3>
                       {isBusy && <Loader2 className="w-4 h-4 animate-spin text-mystic-400" />}
                     </div>
                     <div className="text-mystic-700 leading-relaxed">
