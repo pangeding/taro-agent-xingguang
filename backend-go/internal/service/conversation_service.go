@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"backend-go/internal/agent"
 	"backend-go/internal/db"
 
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/schema"
 	openai "github.com/openai/openai-go"
 	"gorm.io/gorm"
 )
@@ -17,6 +20,7 @@ import (
 type ConversationService struct {
 	DB    *gorm.DB
 	LLM   *agent.ChatClient
+	Agent *adk.ChatModelAgent
 	MsgID uint
 }
 
@@ -26,6 +30,10 @@ func NewConversationService(d *gorm.DB) *ConversationService {
 
 func (s *ConversationService) SetLLM(llm *agent.ChatClient) {
 	s.LLM = llm
+}
+
+func (s *ConversationService) SetAgent(a *adk.ChatModelAgent) {
+	s.Agent = a
 }
 
 type ChatChunk struct {
@@ -46,52 +54,102 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 	}
 	_ = userMsg
 
-	if s.LLM == nil {
-		return errors.New("LLM not configured")
+	if s.Agent == nil {
+		return errors.New("chat agent not configured")
 	}
 
 	var messages []db.Message
 	s.DB.Where("conversation_id = ?", conversationID).Order("created_at ASC").Find(&messages)
 
-	openaiMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	history := make([]*schema.Message, 0, len(messages))
 	for _, msg := range messages {
-		if msg.Role == "user" {
-			openaiMessages = append(openaiMessages, openai.UserMessage(msg.Content))
-		} else if msg.Role == "assistant" {
-			openaiMessages = append(openaiMessages, openai.AssistantMessage(msg.Content))
+		switch msg.Role {
+		case "user":
+			history = append(history, schema.UserMessage(msg.Content))
+		case "assistant":
+			history = append(history, schema.AssistantMessage(msg.Content, nil))
 		}
 	}
 
-	stream, err := s.LLM.ChatStream(ctx, agent.CHAT_SYSTEM_PROMPT, openaiMessages)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
+	runCtx := WithConversationID(ctx, conversationID)
+	runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: s.Agent, EnableStreaming: true})
+	iter := runner.Run(runCtx, history)
 
-	var fullContent string
+	var fullContent strings.Builder
 	for {
-		delta, err := stream.Next()
-		if errors.Is(err, io.EOF) {
+		ev, ok := iter.Next()
+		if !ok {
 			break
 		}
-		if err != nil {
-			return err
+		if ev.Err != nil {
+			return ev.Err
 		}
-		fullContent += delta
-		writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(delta)))
+		if ev.Output == nil || ev.Output.MessageOutput == nil {
+			continue
+		}
+		mo := ev.Output.MessageOutput
+		switch mo.Role {
+		case schema.Assistant:
+			if mo.IsStreaming {
+				for {
+					chunk, err := mo.MessageStream.Recv()
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						return err
+					}
+					if chunk == nil || chunk.Content == "" {
+						continue
+					}
+					fullContent.WriteString(chunk.Content)
+					writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(chunk.Content)))
+				}
+			} else if mo.Message != nil && mo.Message.Content != "" {
+				fullContent.WriteString(mo.Message.Content)
+				writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(mo.Message.Content)))
+			}
+		case schema.Tool:
+			toolMsg, err := mo.GetMessage()
+			if err != nil {
+				return err
+			}
+			if toolMsg != nil && mo.ToolName == "draw_tarot" {
+				emitCardDrawn(writer, toolMsg.Content)
+			}
+		}
 	}
 
-	assistantMsg, err := s.AddMessage(conversationID, userID, "assistant", fullContent, "text")
+	text := fullContent.String()
+	assistantMsg, err := s.AddMessage(conversationID, userID, "assistant", text, "text")
 	if err != nil {
 		return err
 	}
-	writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "msg_id": %d}`, toRawJSON(fullContent), assistantMsg.ID))
+	writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "msg_id": %d}`, toRawJSON(text), assistantMsg.ID))
 
 	if count, err := s.GetMessageCount(conversationID); err == nil && int(count) == 2 {
 		s.GenerateTitleAsync(conversationID)
 	}
 
 	return nil
+}
+
+// emitCardDrawn 把 draw_tarot 工具返回的真实牌面转成 SSE card_drawn 事件。
+func emitCardDrawn(writer func(event string, data string), toolResultJSON string) {
+	var out DrawTarotOutput
+	if err := json.Unmarshal([]byte(toolResultJSON), &out); err != nil {
+		return
+	}
+	for _, c := range out.Cards {
+		writer("card_drawn", toRawJSON(map[string]any{
+			"name":          c.Name,
+			"is_reversed":   c.IsReversed,
+			"position":      c.Position,
+			"position_name": c.PositionName,
+			"reading_id":    out.ReadingID,
+			"image_url":     c.ImageURL,
+		}))
+	}
 }
 
 func toRawJSON(v any) string {

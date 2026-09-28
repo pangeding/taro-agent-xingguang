@@ -46,6 +46,25 @@ function SimpleMarkdown({ content }) {
   )
 }
 
+function CardStrip({ cards }) {
+  if (!cards || !cards.length) return null
+  return (
+    <div className="flex flex-wrap gap-2">
+      {cards.map((c, i) => (
+        <div
+          key={i}
+          className="flex flex-col items-center bg-mystic-800 text-mystic-50 rounded-lg px-3 py-2 min-w-[72px] shadow"
+        >
+          <span className="text-lg">🎴</span>
+          <span className="text-sm font-semibold">{c.name}</span>
+          <span className="text-xs opacity-80">{c.is_reversed ? '逆位' : '正位'}</span>
+          {c.position_name ? <span className="text-[10px] opacity-60">{c.position_name}</span> : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function ChatPage() {
   const [ready, setReady] = useState(false)
   const [conversations, setConversations] = useState([])
@@ -55,6 +74,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
+  const [streamCards, setStreamCards] = useState([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [error, setError] = useState('')
   const messagesEndRef = useRef(null)
@@ -207,15 +227,17 @@ export default function ChatPage() {
     let fullContent = ''
     let finished = false
     let errorMessage = null
+    let drawnCards = []
 
-    const appendAssistant = (text) => {
+    const appendAssistant = (text, type = 'text', cards = null) => {
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now(),
+          id: Date.now() + Math.random(),
           role: 'assistant',
           content: text,
-          type: 'text',
+          type,
+          cards: cards || undefined,
           created_at: new Date().toISOString(),
         },
       ])
@@ -250,12 +272,20 @@ export default function ChatPage() {
           errorMessage = data.error || '服务出错了'
           return
         }
+        if (eventName === 'card_drawn' || (data.name && data.is_reversed !== undefined)) {
+          drawnCards = [...drawnCards, data]
+          setStreamCards(drawnCards)
+          return
+        }
         if (data.delta) {
           fullContent += data.delta
           setStreamContent(fullContent)
         }
         if (data.done) {
           finished = true
+          if (drawnCards.length) {
+            appendAssistant('', 'cards', drawnCards)
+          }
           appendAssistant(data.full_text || fullContent)
           loadConversations()
         }
@@ -299,6 +329,7 @@ export default function ChatPage() {
       }
       setIsStreaming(false)
       setStreamContent('')
+      setStreamCards([])
     }
   }
 
@@ -386,7 +417,15 @@ export default function ChatPage() {
             </div>
           )}
 
-          {messages.map((msg) => (
+          {messages.map((msg) => {
+            if (msg.type === 'cards') {
+              return (
+                <div key={msg.id} className="flex justify-start">
+                  <CardStrip cards={msg.cards} />
+                </div>
+              )
+            }
+            return (
             <div
               key={msg.id}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -401,7 +440,14 @@ export default function ChatPage() {
               </div>
               </div>
             </div>
-          ))}
+            )
+          })}
+
+          {isStreaming && streamCards.length > 0 && (
+            <div className="flex justify-start">
+              <CardStrip cards={streamCards} />
+            </div>
+          )}
 
           {isStreaming && streamContent && (
             <div className="flex justify-start">
