@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"backend-go/internal/agent"
 	"backend-go/internal/db"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
-	openai "github.com/openai/openai-go"
 	"gorm.io/gorm"
 )
 
@@ -353,11 +353,6 @@ func (s *ConversationService) GetMessageCount(conversationID uint) (int64, error
 	return count, err
 }
 
-type TarotStreamEvent struct {
-	Event string      `json:"event"`
-	Data  interface{} `json:"data"`
-}
-
 func (s *ConversationService) StreamTarotReading(ctx context.Context, conversationID uint, userID, question, spreadType string, writer func(event string, data string), readingSvc *ReadingService) error {
 	if s.LLM == nil || readingSvc == nil {
 		return errors.New("LLM or ReadingService not configured")
@@ -383,70 +378,96 @@ func (s *ConversationService) StreamTarotReading(ctx context.Context, conversati
 		return err
 	}
 
+	// 先推牌面：用户立刻看到抽到什么牌，不必等解读
 	for i, dc := range drawnCards {
 		cardData := fmt.Sprintf(`{"name": %s, "is_reversed": %t, "position": %d}`, toRawJSON(dc.Name), dc.IsReversed, i)
 		writer("card_drawn", cardData)
 	}
 
-	var readingResult *ReadingResult
 	sessionID := fmt.Sprintf("conv_%d", conversationID)
-	sid := &sessionID
+	p, err := readingSvc.PrepareReading(question, spreadType, &sessionID, drawnCards)
+	if err != nil {
+		return err
+	}
 
-	// 必须复用上面已推送给前端的这副牌，否则前端看到的牌与实际解读的牌会不一致
+	// 主输出（message 事件）按牌阵分派，两路互斥，界面上每段文字只出现一次：
+	//   single —— 这张牌的解读本身，写入 reading_cards.interpretation
+	//   three  —— 三张牌的综合解读，写入 readings.synthesis
+	var mainText string
+
 	if spreadType == "three" {
-		readingResult, err = readingSvc.CreateReadingLangGraphWithCards(question, spreadType, sid, nil, drawnCards)
+		interps := s.interpretAll(ctx, readingSvc, p, writer)
+		mainText, _ = readingSvc.StreamSynthesis(ctx, p, interps, func(delta string) {
+			writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(delta)))
+		})
+		readingSvc.SaveSynthesis(p, mainText)
 	} else {
-		readingResult, err = readingSvc.CreateReadingWithCards(question, spreadType, sid, drawnCards)
+		mainText, _ = readingSvc.StreamCardInterpretation(ctx, p, &p.Cards[0], func(delta string) {
+			writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(delta)))
+		})
+		readingSvc.SaveCardInterpretation(&p.Cards[0], mainText)
 	}
+
+	readingMsg, err := s.AddMessage(conversationID, userID, "assistant", mainText, "reading")
 	if err != nil {
 		return err
 	}
+	s.DB.Model(&db.Message{}).Where("id = ?", readingMsg.ID).Update("reading_id", p.Reading.ID)
 
-	contextMsgs := "对话历史："
-	if readingResult != nil && len(readingResult.Cards) > 0 {
-		for _, c := range readingResult.Cards {
-			contextMsgs += fmt.Sprintf("\n- %s(%s)：%s", c.Name, positionName(c.Position, spreadType), c.Interpretation)
-		}
-	}
+	writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "reading_id": %d, "msg_id": %d}`, toRawJSON(mainText), p.Reading.ID, readingMsg.ID))
 
-	openaiMessages := []openai.ChatCompletionMessageParamUnion{
-		openai.UserMessage(question),
-		openai.AssistantMessage("已为您抽取塔罗牌。" + contextMsgs),
-	}
-
-	stream, err := s.LLM.ChatStream(ctx, agent.TAROT_READING_SYSTEM_PROMPT, openaiMessages)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-
-	var fullContent string
-	for {
-		delta, err := stream.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		fullContent += delta
-		writer("message", fmt.Sprintf(`{"delta": %s}`, toRawJSON(delta)))
-	}
-
-	if readingResult != nil {
-		readingMsg, _ := s.AddMessage(conversationID, userID, "assistant", fullContent, "reading")
-
-		s.DB.Model(&db.Message{}).Where("id = ?", readingMsg.ID).Update("reading_id", readingResult.ReadingID)
-
-		writer("done", fmt.Sprintf(`{"done": true, "full_text": %s, "reading_id": %d, "msg_id": %d}`, toRawJSON(fullContent), readingResult.ReadingID, readingMsg.ID))
-	}
-
-	msgCount, _ := s.GetMessageCount(conversationID)
-	if int(msgCount) == 4 {
+	if msgCount, err := s.GetMessageCount(conversationID); err == nil && int(msgCount) == 4 {
 		go s.GenerateTitleAsync(conversationID)
 	}
 
 	return nil
+}
+
+// interpretAll 并发解读三张牌，每张牌解读完成即推一条 card_interpreted 事件，
+// 界面因此能在综合解读之前就逐张显示内容。
+// 返回按 position 升序排列的解读，可直接交给 BuildSynthesisPrompt。
+func (s *ConversationService) interpretAll(ctx context.Context, readingSvc *ReadingService, p *PreparedReading, writer func(event string, data string)) []agent.CardInterpretation {
+	interps := make([]agent.CardInterpretation, len(p.Cards))
+	var wg sync.WaitGroup
+	// writer 最终落到 gin.ResponseWriter，多 goroutine 并发写会交错出半截事件，必须串行化
+	var mu sync.Mutex
+
+	for i := range p.Cards {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+
+			rc := &p.Cards[i]
+			text := readingSvc.InterpretCard(ctx, p, rc)
+			readingSvc.SaveCardInterpretation(rc, text)
+
+			cardName := ""
+			if card := p.CardData[rc.CardID]; card != nil {
+				cardName = card.Name
+			}
+
+			interps[i] = agent.CardInterpretation{
+				CardID:         rc.CardID,
+				CardName:       cardName,
+				IsReversed:     rc.IsReversed,
+				Position:       rc.Position,
+				Interpretation: text,
+				Status:         "success",
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			writer("card_interpreted", toRawJSON(map[string]any{
+				"position":       rc.Position,
+				"name":           cardName,
+				"is_reversed":    rc.IsReversed,
+				"interpretation": text,
+			}))
+		}(i)
+	}
+
+	wg.Wait()
+	return interps
 }
 
 func positionName(pos int, spreadType string) string {

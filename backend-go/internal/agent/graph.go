@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 
 	"backend-go/internal/db"
 
@@ -76,31 +77,44 @@ func CreateReadingGraph(llm *ChatClient) (compose.Runnable[*ReadingState, *Readi
 	return runner, err
 }
 
+// interpretCards 并发解读各张牌。
+//
+// 三张牌阵如果顺序解读，耗时是单张的三倍；并发后总耗时约等于最慢的一张。
+// 结果按下标写入预分配的切片，保证 Interpretations 的顺序与 CardsInfo 一致
+// （synthesize 与上层的落库循环都依赖这个顺序）。
 func interpretCards(ctx context.Context, llm *ChatClient, state *ReadingState) (*ReadingState, error) {
-	for _, ci := range state.CardsInfo {
-		prompt := BuildCardPrompt(ci.Card, ci.IsReversed, state.Question, ci.Position, state.SpreadType)
-		text, err := llm.Chat(ctx, SYSTEM_PROMPT, prompt)
-		if err != nil {
-			log.Printf("LLM interpret failed for %s: %v", ci.Name, err)
-			state.Interpretations = append(state.Interpretations, CardInterpretation{
-				CardID:         ci.ID,
-				CardName:       ci.Name,
-				IsReversed:     ci.IsReversed,
-				Position:       ci.Position,
-				Interpretation: GetBasicInterpretation(ci.Card, ci.IsReversed),
-				Status:         "fallback",
-			})
-		} else {
-			state.Interpretations = append(state.Interpretations, CardInterpretation{
-				CardID:         ci.ID,
-				CardName:       ci.Name,
-				IsReversed:     ci.IsReversed,
-				Position:       ci.Position,
-				Interpretation: strings.TrimSpace(text),
-				Status:         "success",
-			})
-		}
+	interps := make([]CardInterpretation, len(state.CardsInfo))
+	var wg sync.WaitGroup
+
+	for i, ci := range state.CardsInfo {
+		wg.Add(1)
+		go func(i int, ci CardInfo) {
+			defer wg.Done()
+
+			build := func(text, status string) CardInterpretation {
+				return CardInterpretation{
+					CardID:         ci.ID,
+					CardName:       ci.Name,
+					IsReversed:     ci.IsReversed,
+					Position:       ci.Position,
+					Interpretation: text,
+					Status:         status,
+				}
+			}
+
+			prompt := BuildCardPrompt(ci.Card, ci.IsReversed, state.Question, ci.Position, state.SpreadType)
+			text, err := llm.Chat(ctx, SYSTEM_PROMPT, prompt)
+			if err != nil {
+				log.Printf("LLM interpret failed for %s: %v", ci.Name, err)
+				interps[i] = build(GetBasicInterpretation(ci.Card, ci.IsReversed), "fallback")
+				return
+			}
+			interps[i] = build(strings.TrimSpace(text), "success")
+		}(i, ci)
 	}
+
+	wg.Wait()
+	state.Interpretations = interps
 	return state, nil
 }
 

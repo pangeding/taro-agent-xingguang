@@ -28,6 +28,7 @@ type Reading struct {
 	SessionID  string        `gorm:"size:100;index" json:"session_id"`
 	Question   string        `gorm:"type:text" json:"question"`
 	SpreadType string        `gorm:"size:50;default:single" json:"spread_type"`
+	Synthesis  string        `gorm:"type:text" json:"synthesis"`
 	CreatedAt  time.Time     `gorm:"index;autoCreateTime" json:"created_at"`
 	Cards      []ReadingCard `gorm:"foreignKey:ReadingID" json:"cards"`
 }

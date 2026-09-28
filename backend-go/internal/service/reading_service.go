@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
+	"io"
 	"math/rand"
+	"strings"
 	"time"
 
 	"backend-go/internal/agent"
@@ -41,12 +44,13 @@ type ReadingCardResponse struct {
 }
 
 type ReadingResult struct {
-	ReadingID  uint                   `json:"reading_id"`
-	SessionID  string                 `json:"session_id"`
-	Question   string                 `json:"question"`
-	SpreadType string                 `json:"spread_type"`
-	CreatedAt  *time.Time             `json:"created_at"`
-	Cards      []ReadingCardResponse  `json:"cards"`
+	ReadingID  uint                  `json:"reading_id"`
+	SessionID  string                `json:"session_id"`
+	Question   string                `json:"question"`
+	SpreadType string                `json:"spread_type"`
+	Synthesis  string                `json:"synthesis"`
+	CreatedAt  *time.Time            `json:"created_at"`
+	Cards      []ReadingCardResponse `json:"cards"`
 }
 
 type ReadingService struct {
@@ -109,20 +113,30 @@ func (s *ReadingService) CreateReading(question, spreadType string, sessionID *s
 	return s.CreateReadingWithCards(question, spreadType, sessionID, drawnCards)
 }
 
-// CreateReadingWithCards 用调用方给定的牌生成解读。
-//
-// 流式占卜（StreamTarotReading）需要先把抽到的牌推给前端、再解读，
-// 若此处再次抽牌，就会出现「推给前端的牌」与「实际解读的牌」不是同一副的错位。
-func (s *ReadingService) CreateReadingWithCards(question, spreadType string, sessionID *string, drawnCards []DrawnCard) (*ReadingResult, error) {
+// synthesisMarker 是历史版本把综合解读拼进最后一张牌解读末尾时使用的分隔符。
+// 仅用于读取旧数据时拆分，新数据写入 readings.synthesis 列。
+const synthesisMarker = "\n\n---\n**综合解读**: "
+
+// PreparedReading 是已落库、等待写入解读的占卜记录。
+// 抽牌与解读拆开，是为了让流式占卜能在抽牌后立刻推送牌面、再逐张推进度。
+type PreparedReading struct {
+	Reading  *db.Reading
+	Cards    []db.ReadingCard       // 按 position 升序
+	CardData map[uint]*db.TarotCard // card_id → 牌库数据
+}
+
+// PrepareReading 建 readings / reading_cards 行，不调用 LLM。
+func (s *ReadingService) PrepareReading(question, spreadType string, sessionID *string, drawnCards []DrawnCard) (*PreparedReading, error) {
 	sid := uuid.New().String()
 	if sessionID != nil && *sessionID != "" {
 		sid = *sessionID
 	}
 
 	reading := db.Reading{SessionID: sid, Question: question, SpreadType: spreadType}
-	s.DB.Create(&reading)
+	if err := s.DB.Create(&reading).Error; err != nil {
+		return nil, err
+	}
 
-	readingCardIDs := make([]uint, len(drawnCards))
 	for i, dc := range drawnCards {
 		rc := db.ReadingCard{
 			ReadingID:  reading.ID,
@@ -130,42 +144,149 @@ func (s *ReadingService) CreateReadingWithCards(question, spreadType string, ses
 			Position:   i,
 			IsReversed: dc.IsReversed,
 		}
-		s.DB.Create(&rc)
-		readingCardIDs[i] = rc.ID
-	}
-
-	cardIDs := make([]uint, len(drawnCards))
-	for i, dc := range drawnCards {
-		cardIDs[i] = dc.ID
-	}
-	var cards []db.TarotCard
-	s.DB.Where("id IN ?", cardIDs).Find(&cards)
-	cardMap := make(map[uint]*db.TarotCard)
-	for i := range cards {
-		cardMap[cards[i].ID] = &cards[i]
-	}
-
-	var resultCards []db.ReadingCard
-	s.DB.Where("id IN ?", readingCardIDs).Find(&resultCards)
-
-	for i := range resultCards {
-		rc := &resultCards[i]
-		card := cardMap[rc.CardID]
-		if s.LLM != nil {
-			prompt := agent.BuildCardPrompt(card, rc.IsReversed, question, rc.Position, spreadType)
-			text, err := s.LLM.Chat(context.Background(), agent.SYSTEM_PROMPT, prompt)
-			if err != nil {
-				rc.Interpretation = agent.GetBasicInterpretation(card, rc.IsReversed)
-			} else {
-				rc.Interpretation = text
-			}
-		} else {
-			rc.Interpretation = agent.GetBasicInterpretation(card, rc.IsReversed)
+		if err := s.DB.Create(&rc).Error; err != nil {
+			return nil, err
 		}
-		s.DB.Save(rc)
 	}
 
-	return s.GetReadingByID(reading.ID)
+	var rcs []db.ReadingCard
+	s.DB.Where("reading_id = ?", reading.ID).Order("position ASC").Find(&rcs)
+
+	cardIDs := make([]uint, 0, len(drawnCards))
+	for _, dc := range drawnCards {
+		cardIDs = append(cardIDs, dc.ID)
+	}
+
+	cardData := make(map[uint]*db.TarotCard, len(cardIDs))
+	if len(cardIDs) > 0 {
+		var cards []db.TarotCard
+		s.DB.Where("id IN ?", cardIDs).Find(&cards)
+		for i := range cards {
+			cardData[cards[i].ID] = &cards[i]
+		}
+	}
+
+	return &PreparedReading{Reading: &reading, Cards: rcs, CardData: cardData}, nil
+}
+
+// InterpretCard 非流式解读单张牌；LLM 不可用或失败时降级为牌义库文本。
+func (s *ReadingService) InterpretCard(ctx context.Context, p *PreparedReading, rc *db.ReadingCard) string {
+	card := p.CardData[rc.CardID]
+	if s.LLM == nil || card == nil {
+		return agent.GetBasicInterpretation(card, rc.IsReversed)
+	}
+
+	prompt := agent.BuildCardPrompt(card, rc.IsReversed, p.Reading.Question, rc.Position, p.Reading.SpreadType)
+	text, err := s.LLM.Chat(ctx, agent.SYSTEM_PROMPT, prompt)
+	if err != nil || strings.TrimSpace(text) == "" {
+		return agent.GetBasicInterpretation(card, rc.IsReversed)
+	}
+	return strings.TrimSpace(text)
+}
+
+// StreamCardInterpretation 流式解读单张牌，onDelta 逐字回调，返回最终文本。
+//
+// 降级路径也会通过 onDelta 一次性输出，保证界面上一定有内容可见。
+// 返回的 error 仅供上层记日志，调用方无需中断流程。
+func (s *ReadingService) StreamCardInterpretation(ctx context.Context, p *PreparedReading, rc *db.ReadingCard, onDelta func(string)) (string, error) {
+	card := p.CardData[rc.CardID]
+	if s.LLM == nil || card == nil {
+		text := agent.GetBasicInterpretation(card, rc.IsReversed)
+		onDelta(text)
+		return text, nil
+	}
+
+	prompt := agent.BuildCardPrompt(card, rc.IsReversed, p.Reading.Question, rc.Position, p.Reading.SpreadType)
+	stream, err := s.LLM.ChatStreamSimple(ctx, agent.SYSTEM_PROMPT, prompt)
+	if err != nil {
+		text := agent.GetBasicInterpretation(card, rc.IsReversed)
+		onDelta(text)
+		return text, err
+	}
+	defer stream.Close()
+
+	text, streamErr := drainStream(stream, onDelta)
+	if text == "" {
+		text = agent.GetBasicInterpretation(card, rc.IsReversed)
+		onDelta(text)
+	}
+	return text, streamErr
+}
+
+// StreamSynthesis 流式生成综合解读，onDelta 逐字回调，返回最终文本。
+// 降级行为同 StreamCardInterpretation。
+func (s *ReadingService) StreamSynthesis(ctx context.Context, p *PreparedReading, interps []agent.CardInterpretation, onDelta func(string)) (string, error) {
+	const fallback = "（综合解读暂时不可用，请先参考上方各张牌的解读）"
+
+	if s.LLM == nil {
+		onDelta(fallback)
+		return fallback, nil
+	}
+
+	prompt := agent.BuildSynthesisPrompt(interps, p.Reading.Question)
+	stream, err := s.LLM.ChatStreamSimple(ctx, agent.SYSTEM_PROMPT, prompt)
+	if err != nil {
+		onDelta(fallback)
+		return fallback, err
+	}
+	defer stream.Close()
+
+	text, streamErr := drainStream(stream, onDelta)
+	if text == "" {
+		text = fallback
+		onDelta(text)
+	}
+	return text, streamErr
+}
+
+// drainStream 消费一个流，逐字回调并返回去掉首尾空白的全文。
+func drainStream(stream *agent.StreamHandler, onDelta func(string)) (string, error) {
+	var full strings.Builder
+	for {
+		delta, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return strings.TrimSpace(full.String()), err
+		}
+		if delta == "" {
+			continue
+		}
+		full.WriteString(delta)
+		onDelta(delta)
+	}
+	return strings.TrimSpace(full.String()), nil
+}
+
+// SaveCardInterpretation 把解读写回 reading_cards。
+func (s *ReadingService) SaveCardInterpretation(rc *db.ReadingCard, text string) {
+	rc.Interpretation = text
+	s.DB.Save(rc)
+}
+
+// SaveSynthesis 把综合解读写入 readings.synthesis。
+func (s *ReadingService) SaveSynthesis(p *PreparedReading, text string) {
+	p.Reading.Synthesis = text
+	s.DB.Model(&db.Reading{}).Where("id = ?", p.Reading.ID).Update("synthesis", text)
+}
+
+// CreateReadingWithCards 用调用方给定的牌生成解读。
+//
+// 流式占卜（StreamTarotReading）需要先把抽到的牌推给前端、再解读，
+// 若此处再次抽牌，就会出现「推给前端的牌」与「实际解读的牌」不是同一副的错位。
+func (s *ReadingService) CreateReadingWithCards(question, spreadType string, sessionID *string, drawnCards []DrawnCard) (*ReadingResult, error) {
+	p, err := s.PrepareReading(question, spreadType, sessionID, drawnCards)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range p.Cards {
+		text := s.InterpretCard(context.Background(), p, &p.Cards[i])
+		s.SaveCardInterpretation(&p.Cards[i], text)
+	}
+
+	return s.GetReadingByID(p.Reading.ID)
 }
 
 // CreateReadingLangGraph 自行抽牌后走 Eino 图解读（三张牌阵会额外生成综合解读）。
@@ -257,11 +378,7 @@ func (s *ReadingService) CreateReadingLangGraphWithCards(question, spreadType st
 	}
 
 	if state.Synthesis != "" && spreadType == "three" {
-		lastID := readingCards[len(readingCards)-1].ID
-		var lastRC db.ReadingCard
-		s.DB.First(&lastRC, lastID)
-		lastRC.Interpretation += "\n\n---\n**综合解读**: " + state.Synthesis
-		s.DB.Save(&lastRC)
+		s.DB.Model(&db.Reading{}).Where("id = ?", reading.ID).Update("synthesis", state.Synthesis)
 	}
 
 	return s.GetReadingByID(reading.ID)
@@ -295,11 +412,23 @@ func (s *ReadingService) GetReadingByID(id uint) (*ReadingResult, error) {
 		}
 	}
 
+	synthesis := reading.Synthesis
+	if synthesis == "" && len(cards) > 0 {
+		// 兼容历史数据：旧版本把综合解读拼在最后一张牌的解读末尾，
+		// 不拆开的话同一段综合解读会同时出现在牌面卡片和综合解读面板里。
+		last := &cards[len(cards)-1]
+		if idx := strings.Index(last.Interpretation, synthesisMarker); idx >= 0 {
+			synthesis = strings.TrimSpace(last.Interpretation[idx+len(synthesisMarker):])
+			last.Interpretation = strings.TrimSpace(last.Interpretation[:idx])
+		}
+	}
+
 	return &ReadingResult{
 		ReadingID:  reading.ID,
 		SessionID:  reading.SessionID,
 		Question:   reading.Question,
 		SpreadType: reading.SpreadType,
+		Synthesis:  synthesis,
 		CreatedAt:  &reading.CreatedAt,
 		Cards:      cards,
 	}, nil
