@@ -278,13 +278,13 @@ func (s *ConversationService) StreamTarotReading(ctx context.Context, conversati
 
 	var readingResult *ReadingResult
 	sessionID := fmt.Sprintf("conv_%d", conversationID)
+	sid := &sessionID
 
+	// 必须复用上面已推送给前端的这副牌，否则前端看到的牌与实际解读的牌会不一致
 	if spreadType == "three" {
-		sid := &sessionID
-		readingResult, err = readingSvc.CreateReadingLangGraph(question, spreadType, sid, nil)
+		readingResult, err = readingSvc.CreateReadingLangGraphWithCards(question, spreadType, sid, nil, drawnCards)
 	} else {
-		sid := &sessionID
-		readingResult, err = readingSvc.CreateReading(question, spreadType, sid)
+		readingResult, err = readingSvc.CreateReadingWithCards(question, spreadType, sid, drawnCards)
 	}
 	if err != nil {
 		return err
