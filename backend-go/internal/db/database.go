@@ -54,7 +54,7 @@ func maskDSN(dsn string) string {
 }
 
 func AutoMigrate(db *gorm.DB) {
-	db.AutoMigrate(&TarotCard{}, &Reading{}, &ReadingCard{}, &Feedback{}, &Conversation{}, &Message{})
+	db.AutoMigrate(&TarotCard{}, &Reading{}, &ReadingCard{}, &Feedback{}, &Conversation{}, &Message{}, &User{}, &Session{})
 }
 
 // BackfillConversationChannel 把历史上由占卜页写入的会话标记为 reading 频道，
