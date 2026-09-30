@@ -28,7 +28,6 @@ function CardStrip({ cards }) {
 
 // 页面主体。AuthGate 保证只有已登录用户才会走到这里。
 function ChatContent() {
-  const [ready, setReady] = useState(false)
   const [conversations, setConversations] = useState([])
   const [currentConversation, setCurrentConversation] = useState(null)
   const [messages, setMessages] = useState([])
@@ -42,25 +41,33 @@ function ChatContent() {
   const messagesEndRef = useRef(null)
   const abortControllerRef = useRef(null)
 
-  // 身份由 AuthGate 保证（已登录才会渲染本页面），不再需要 /user/init。
-  useEffect(() => () => abortControllerRef.current?.abort(), [])
-
+  // 首屏 bootstrap。
+  //
+  // 这里不再有「先 initUser 再置 ready」的两段式：身份由 AuthGate 保证，
+  // 而 ready 这个标志一旦没人置位，下面的 if (!ready) return 会让会话列表
+  // 永远是空的（正是「登录进去对话没有了」的成因）。直接跑即可。
   useEffect(() => {
-    scrollToBottom()
-  }, [messages, streamContent])
+    let cancelled = false
 
-  useEffect(() => {
-    if (!ready) return
-    const bootstrap = async () => {
+    ;(async () => {
       const list = await loadConversations()
+      if (cancelled) return
       if (list && list.length > 0) {
         loadConversation(list[0].id)
       } else {
         createConversation()
       }
+    })()
+
+    return () => {
+      cancelled = true
+      abortControllerRef.current?.abort()
     }
-    bootstrap()
-  }, [ready])
+  }, [])
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages, streamContent])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
