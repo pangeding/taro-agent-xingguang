@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 
+	"backend-go/internal/auth"
+
 	"github.com/cloudwego/eino/components/tool"
 	toolutils "github.com/cloudwego/eino/components/tool/utils"
 )
 
 type ctxKey int
 
-const conversationIDKey ctxKey = iota
+const (
+	conversationIDKey ctxKey = iota
+	actorKey
+)
 
 // WithConversationID 把会话 ID 注入 context，供抽牌工具确定归属。
 func WithConversationID(ctx context.Context, id uint) context.Context {
@@ -22,6 +27,22 @@ func conversationIDFromContext(ctx context.Context) uint {
 		return v
 	}
 	return 0
+}
+
+// WithActor 把调用者注入 context。
+//
+// draw_tarot 工具会在会话中途自己抽牌并落库 readings，
+// 这条路径不经过 handler，只能靠 ctx 把 ownerID 传进来；
+// 缺了它新记录会落成 owner_id = 0，既不可见也不可追溯。
+func WithActor(ctx context.Context, actor auth.Actor) context.Context {
+	return context.WithValue(ctx, actorKey, actor)
+}
+
+func actorFromContext(ctx context.Context) auth.Actor {
+	if v, ok := ctx.Value(actorKey).(auth.Actor); ok {
+		return v
+	}
+	return auth.Actor{}
 }
 
 type DrawTarotCard struct {
@@ -59,7 +80,9 @@ func NewTarotDrawTool(readingSvc *ReadingService) (tool.InvokableTool, error) {
 			}
 
 			sessionID := fmt.Sprintf("conv_%d", conversationIDFromContext(ctx))
-			result, err := readingSvc.CreateReadingLangGraph(in.Question, spreadType, &sessionID, nil)
+			convID := conversationIDFromContext(ctx)
+			ownerID := actorFromContext(ctx).UserID
+			result, err := readingSvc.CreateReadingLangGraph(in.Question, spreadType, &sessionID, nil, ownerID, &convID)
 			if err != nil {
 				return DrawTarotOutput{}, err
 			}

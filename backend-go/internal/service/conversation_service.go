@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"backend-go/internal/agent"
+	"backend-go/internal/auth"
 	"backend-go/internal/db"
 
 	"github.com/cloudwego/eino/adk"
@@ -141,8 +142,8 @@ type ChatDone struct {
 	MsgID    uint   `json:"msg_id"`
 }
 
-func (s *ConversationService) StreamChat(ctx context.Context, conversationID uint, userID, content string, writer func(event string, data string)) error {
-	userMsg, err := s.AddMessage(conversationID, userID, "user", content, "text")
+func (s *ConversationService) StreamChat(ctx context.Context, conversationID uint, actor auth.Actor, content string, writer func(event string, data string)) error {
+	userMsg, err := s.AddMessage(conversationID, actor, "user", content, "text")
 	if err != nil {
 		return err
 	}
@@ -165,7 +166,10 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 		}
 	}
 
+	// 把 actor 注入 ctx：draw_tarot 工具在里面抽牌并落库 readings，
+	// 需要 ownerID 才能给新记录打上归属（见 tarot_tool.go）。
 	runCtx := WithConversationID(ctx, conversationID)
+	runCtx = WithActor(runCtx, actor)
 	runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: s.Agent, EnableStreaming: true})
 	iter := runner.Run(runCtx, history)
 
@@ -220,7 +224,7 @@ func (s *ConversationService) StreamChat(ctx context.Context, conversationID uin
 	}
 
 	text := fullContent.String()
-	assistantMsg, err := s.AddMessage(conversationID, userID, "assistant", text, "text")
+	assistantMsg, err := s.AddMessage(conversationID, actor, "assistant", text, "text")
 	if err != nil {
 		return err
 	}
@@ -261,12 +265,12 @@ func toRawJSON(v any) string {
 	return string(b)
 }
 
-func (s *ConversationService) CreateConversation(userID, channel string) (*db.Conversation, error) {
-	if userID == "" {
-		return nil, errors.New("user_id is required")
+func (s *ConversationService) CreateConversation(actor auth.Actor, channel string) (*db.Conversation, error) {
+	if actor.UserID == 0 {
+		return nil, errors.New("调用者未认证")
 	}
 
-	conv := db.Conversation{UserID: userID, Title: "新对话", Channel: normalizeChannel(channel)}
+	conv := db.Conversation{OwnerID: actor.UserID, Title: "新对话", Channel: normalizeChannel(channel)}
 	if err := s.DB.Create(&conv).Error; err != nil {
 		return nil, err
 	}
@@ -276,8 +280,10 @@ func (s *ConversationService) CreateConversation(userID, channel string) (*db.Co
 // ListConversations 按 channel 过滤。
 // channel 为空时只返回 chat 频道（保持「不传参数 = 聊天」的直觉），
 // channel 为 "all" 时不过滤。
-func (s *ConversationService) ListConversations(userID, channel string) ([]db.Conversation, error) {
-	q := s.DB.Where("user_id = ?", userID)
+//
+// 归属过滤由 actor.VisibleTo 决定：默认只看自己的；管理员传 scope=all 才看全部。
+func (s *ConversationService) ListConversations(actor auth.Actor, channel string) ([]db.Conversation, error) {
+	q := actor.VisibleTo(s.DB.Model(&db.Conversation{}), "owner_id")
 	if channel != "all" {
 		q = q.Where("channel = ?", normalizeChannel(channel))
 	}
@@ -287,41 +293,69 @@ func (s *ConversationService) ListConversations(userID, channel string) ([]db.Co
 	return conversations, err
 }
 
-func (s *ConversationService) GetConversation(id uint, userID string) (*db.Conversation, error) {
+func (s *ConversationService) GetConversation(id uint, actor auth.Actor) (*db.Conversation, error) {
 	var conv db.Conversation
-	err := s.DB.Where("id = ? AND user_id = ?", id, userID).Preload("Messages").First(&conv).Error
-	if err != nil {
+	q := actor.VisibleTo(s.DB.Model(&db.Conversation{}), "owner_id").Where("id = ?", id)
+	if err := q.Preload("Messages").First(&conv).Error; err != nil {
 		return nil, err
 	}
 	return &conv, nil
 }
 
-func (s *ConversationService) DeleteConversation(id uint, userID string) error {
-	result := s.DB.Where("id = ? AND user_id = ?", id, userID).Delete(&db.Conversation{})
+func (s *ConversationService) DeleteConversation(id uint, actor auth.Actor) error {
+	result := actor.VisibleTo(s.DB.Model(&db.Conversation{}), "owner_id").Where("id = ?", id).Delete(&db.Conversation{})
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
 
-func (s *ConversationService) UpdateTitle(id uint, userID, title string) error {
-	result := s.DB.Model(&db.Conversation{}).Where("id = ? AND user_id = ?", id, userID).Update("title", title)
+func (s *ConversationService) UpdateTitle(id uint, actor auth.Actor, title string) error {
+	result := actor.VisibleTo(s.DB.Model(&db.Conversation{}), "owner_id").Where("id = ?", id).Update("title", title)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
 
-func (s *ConversationService) AddMessage(conversationID uint, userID, role, content, messageType string) (*db.Message, error) {
+// ErrConversationNotFound 表示会话不存在或不属于调用者。
+//
+// 两种情况故意合并为同一个错误：分开返回会让「会话 ID 是否存在」可被枚举。
+var ErrConversationNotFound = errors.New("conversation not found")
+
+// AssertAccessible 在开启 SSE 流之前做一次归属预检。
+//
+// 存在的唯一理由是**让越权请求能返回正确的 HTTP 状态码**：
+// SSE 一旦写出第一个事件，响应状态就固定为 200，
+// 此后再发现越权也无法改成 404，只能退化成流内的 error 事件——
+// 那会让任何只看状态码的客户端把 403/404 误判为成功。
+//
+// 安全上不依赖它：AddMessage / GetMessages 内部仍会独立校验归属（纵深防御），
+// 本函数只是把失败提前到流开始之前。
+func (s *ConversationService) AssertAccessible(conversationID uint, actor auth.Actor) error {
 	var conv db.Conversation
-	if err := s.DB.Where("id = ? AND user_id = ?", conversationID, userID).First(&conv).Error; err != nil {
-		return nil, err
+	q := actor.VisibleTo(s.DB.Model(&db.Conversation{}), "owner_id").Where("id = ?", conversationID)
+	if err := q.First(&conv).Error; err != nil {
+		return ErrConversationNotFound
+	}
+	return nil
+}
+
+// AddMessage 追加消息。
+//
+// 结构是刻意的两段式：先按归属校验父会话，再写子表。
+// 不要图省事直接 INSERT messages —— 那样任何 conversation_id 都能写入。
+func (s *ConversationService) AddMessage(conversationID uint, actor auth.Actor, role, content, messageType string) (*db.Message, error) {
+	var conv db.Conversation
+	q := actor.VisibleTo(s.DB.Model(&db.Conversation{}), "owner_id").Where("id = ?", conversationID)
+	if err := q.First(&conv).Error; err != nil {
+		return nil, ErrConversationNotFound
 	}
 
 	msg := db.Message{
@@ -336,10 +370,12 @@ func (s *ConversationService) AddMessage(conversationID uint, userID, role, cont
 	return &msg, nil
 }
 
-func (s *ConversationService) GetMessages(conversationID uint, userID string, limit, offset int) ([]db.Message, error) {
+// GetMessages 读取会话消息。同样先校验父会话归属，再查子表。
+func (s *ConversationService) GetMessages(conversationID uint, actor auth.Actor, limit, offset int) ([]db.Message, error) {
 	var conv db.Conversation
-	if err := s.DB.Where("id = ? AND user_id = ?", conversationID, userID).First(&conv).Error; err != nil {
-		return nil, err
+	q := actor.VisibleTo(s.DB.Model(&db.Conversation{}), "owner_id").Where("id = ?", conversationID)
+	if err := q.First(&conv).Error; err != nil {
+		return nil, ErrConversationNotFound
 	}
 
 	var messages []db.Message
@@ -347,13 +383,17 @@ func (s *ConversationService) GetMessages(conversationID uint, userID string, li
 	return messages, err
 }
 
+// GetMessageCount 统计会话消息数。
+//
+// 约束：本函数不做归属校验，调用方必须先通过 AddMessage / GetMessages
+// 之类的路径确认过该会话属于当前 actor，再调用它。
 func (s *ConversationService) GetMessageCount(conversationID uint) (int64, error) {
 	var count int64
 	err := s.DB.Model(&db.Message{}).Where("conversation_id = ?", conversationID).Count(&count).Error
 	return count, err
 }
 
-func (s *ConversationService) StreamTarotReading(ctx context.Context, conversationID uint, userID, question, spreadType string, writer func(event string, data string), readingSvc *ReadingService) error {
+func (s *ConversationService) StreamTarotReading(ctx context.Context, conversationID uint, actor auth.Actor, question, spreadType string, writer func(event string, data string), readingSvc *ReadingService) error {
 	if s.LLM == nil || readingSvc == nil {
 		return errors.New("LLM or ReadingService not configured")
 	}
@@ -362,7 +402,7 @@ func (s *ConversationService) StreamTarotReading(ctx context.Context, conversati
 		spreadType = "single"
 	}
 
-	userMsg, err := s.AddMessage(conversationID, userID, "user", "🎴 塔罗占卜："+question, "reading")
+	userMsg, err := s.AddMessage(conversationID, actor, "user", "🎴 塔罗占卜："+question, "reading")
 	if err != nil {
 		return err
 	}
@@ -385,7 +425,9 @@ func (s *ConversationService) StreamTarotReading(ctx context.Context, conversati
 	}
 
 	sessionID := fmt.Sprintf("conv_%d", conversationID)
-	p, err := readingSvc.PrepareReading(question, spreadType, &sessionID, drawnCards)
+	// session_id 保留老语义（conv_<id> 标签）不动，另把真实归属与真实会话 id 显式写入。
+	cid := conversationID
+	p, err := readingSvc.PrepareReading(question, spreadType, &sessionID, drawnCards, actor.UserID, &cid)
 	if err != nil {
 		return err
 	}
@@ -408,7 +450,7 @@ func (s *ConversationService) StreamTarotReading(ctx context.Context, conversati
 		readingSvc.SaveCardInterpretation(&p.Cards[0], mainText)
 	}
 
-	readingMsg, err := s.AddMessage(conversationID, userID, "assistant", mainText, "reading")
+	readingMsg, err := s.AddMessage(conversationID, actor, "assistant", mainText, "reading")
 	if err != nil {
 		return err
 	}

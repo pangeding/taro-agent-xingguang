@@ -3,8 +3,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Menu } from 'lucide-react'
 import Markdown from '../../components/Markdown'
-import { API_BASE } from '../../lib/api'
+import { apiFetch } from '../../lib/api'
 import { streamSSE } from '../../lib/sse'
+import AuthGate from '../../components/AuthGate'
 
 function CardStrip({ cards }) {
   if (!cards || !cards.length) return null
@@ -25,7 +26,8 @@ function CardStrip({ cards }) {
   )
 }
 
-export default function ChatPage() {
+// 页面主体。AuthGate 保证只有已登录用户才会走到这里。
+function ChatContent() {
   const [ready, setReady] = useState(false)
   const [conversations, setConversations] = useState([])
   const [currentConversation, setCurrentConversation] = useState(null)
@@ -40,10 +42,8 @@ export default function ChatPage() {
   const messagesEndRef = useRef(null)
   const abortControllerRef = useRef(null)
 
-  useEffect(() => {
-    initUser()
-    return () => abortControllerRef.current?.abort()
-  }, [])
+  // 身份由 AuthGate 保证（已登录才会渲染本页面），不再需要 /user/init。
+  useEffect(() => () => abortControllerRef.current?.abort(), [])
 
   useEffect(() => {
     scrollToBottom()
@@ -66,36 +66,15 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const getHeaders = () => ({
-    'Content-Type': 'application/json',
-  })
-
-  const initUser = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/user/init`, {
-        method: 'POST',
-        credentials: 'same-origin',
-      })
-      if (!res.ok) throw new Error(`初始化用户失败 (${res.status})`)
-      setReady(true)
-    } catch (err) {
-      console.error('Failed to init user:', err)
-      setError('无法连接到服务，请确认后端已启动后刷新页面。')
-    }
-  }
-
   const loadConversations = async () => {
     try {
       // 只列 chat 频道：占卜页写入的 reading 会话不应出现在聊天侧边栏
-      const res = await fetch(`${API_BASE}/conversations?channel=chat`, {
-        headers: getHeaders(),
-        credentials: 'same-origin',
-      })
-      if (!res.ok) throw new Error(`加载会话失败 (${res.status})`)
-      const data = await res.json()
-      setConversations(data)
+      const data = await apiFetch('/conversations?channel=chat')
+      setConversations(Array.isArray(data) ? data : [])
       return data
     } catch (err) {
+      // 401/403 时 apiFetch 已跳转登录页，错误地再弹一条提示只会闪一下
+      if (err.handled) return null
       console.error('Failed to load conversations:', err)
       setError('加载会话列表失败，请稍后重试。')
       return null
@@ -104,36 +83,30 @@ export default function ChatPage() {
 
   const loadConversation = async (id) => {
     try {
-      const res = await fetch(`${API_BASE}/conversations/${id}`, {
-        headers: getHeaders(),
-        credentials: 'same-origin',
-      })
-      if (res.ok) {
-        const data = await res.json()
+      const data = await apiFetch(`/conversations/${id}`)
+      if (data) {
         setCurrentConversation(data)
         setMessages(data.messages || [])
       }
     } catch (err) {
+      if (err.handled) return
       console.error('Failed to load conversation:', err)
     }
   }
 
   const createConversation = async () => {
     try {
-      const res = await fetch(`${API_BASE}/conversations`, {
+      const data = await apiFetch('/conversations', {
         method: 'POST',
-        headers: getHeaders(),
-        credentials: 'same-origin',
         body: JSON.stringify({ channel: 'chat' }),
       })
-      if (!res.ok) throw new Error(`创建会话失败 (${res.status})`)
-      const data = await res.json()
       setConversations((prev) => [data, ...prev])
       setCurrentConversation(data)
       setMessages([])
       setError('')
       return data
     } catch (err) {
+      if (err.handled) return null
       console.error('Failed to create conversation:', err)
       setError('创建会话失败，请稍后重试。')
       return null
@@ -142,19 +115,14 @@ export default function ChatPage() {
 
   const deleteConversation = async (id) => {
     try {
-      const res = await fetch(`${API_BASE}/conversations/${id}`, {
-        method: 'DELETE',
-        headers: getHeaders(),
-        credentials: 'same-origin',
-      })
-      if (res.ok) {
-        if (currentConversation?.id === id) {
-          setCurrentConversation(null)
-          setMessages([])
-        }
-        loadConversations()
+      await apiFetch(`/conversations/${id}`, { method: 'DELETE' })
+      if (currentConversation?.id === id) {
+        setCurrentConversation(null)
+        setMessages([])
       }
+      loadConversations()
     } catch (err) {
+      if (err.handled) return
       console.error('Failed to delete conversation:', err)
     }
   }
@@ -231,6 +199,11 @@ export default function ChatPage() {
       })
     } catch (err) {
       if (err.name === 'AbortError') {
+        return
+      }
+      // 会话失效时 streamSSE 已跳转登录页，不要往消息流里塞一条「登录状态已失效」
+      if (err.handled) {
+        setError('登录状态已失效，请重新登录。')
         return
       }
       console.error('Stream error:', err)
@@ -405,5 +378,13 @@ export default function ChatPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ChatPage() {
+  return (
+    <AuthGate>
+      <ChatContent />
+    </AuthGate>
   )
 }

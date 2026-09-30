@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
@@ -25,6 +26,53 @@ type Settings struct {
 	DashScopeBaseURL   string   `env:"DASHSCOPE_BASE_URL" envDefault:"https://dashscope.aliyuncs.com/compatible-mode/v1"`
 	DashScopeModel     string   `env:"DASHSCOPE_MODEL"`
 	BackendCORSOrigins []string `env:"BACKEND_CORS_ORIGINS" envDefault:"http://localhost:3000,http://127.0.0.1:3000"`
+
+	// —— 用户系统（见 doc/2026-09-28-用户系统与数据隔离技术文档.md §3.3）——
+	// AppEnv 决定生产保护是否生效：dev | prod。
+	AppEnv string `env:"APP_ENV" envDefault:"dev"`
+	// BootstrapAdmin* 仅在 users 表为空时用于创建首个账号。
+	// dev 有默认值（admin/123456，开箱即用）；prod 必须显式配置且通过强度与保留字校验。
+	BootstrapAdminUsername string `env:"BOOTSTRAP_ADMIN_USERNAME"`
+	BootstrapAdminPassword string `env:"BOOTSTRAP_ADMIN_PASSWORD"`
+	SessionCookieName      string `env:"SESSION_COOKIE_NAME" envDefault:"tarot_session"`
+	SessionTTLHours        int    `env:"SESSION_TTL_HOURS" envDefault:"720"`
+	// CookieSecure 三态：留空则跟随 AppEnv（prod=true）。本地以 http 起 prod 调试时可显式设 false。
+	CookieSecure string `env:"COOKIE_SECURE"`
+	// BindAddr 留空则 prod 绑 127.0.0.1:8000（由 nginx 反代），否则绑 :8000。
+	BindAddr string `env:"BIND_ADDR"`
+}
+
+// IsProd 返回是否处于生产环境保护模式。
+func (s *Settings) IsProd() bool { return strings.EqualFold(strings.TrimSpace(s.AppEnv), "prod") }
+
+// SecureCookie 返回 Cookie 是否带 Secure 标志。留空时跟随 IsProd。
+func (s *Settings) SecureCookie() bool {
+	switch strings.ToLower(strings.TrimSpace(s.CookieSecure)) {
+	case "1", "true", "yes":
+		return true
+	case "0", "false", "no":
+		return false
+	}
+	return s.IsProd()
+}
+
+// ListenAddr 返回 HTTP 监听地址。prod 默认只绑回环，不直接对外。
+func (s *Settings) ListenAddr() string {
+	if a := strings.TrimSpace(s.BindAddr); a != "" {
+		return a
+	}
+	if s.IsProd() {
+		return "127.0.0.1:8000"
+	}
+	return ":8000"
+}
+
+// SessionTTL 返回会话有效期。
+func (s *Settings) SessionTTL() time.Duration {
+	if s.SessionTTLHours <= 0 {
+		return 720 * time.Hour
+	}
+	return time.Duration(s.SessionTTLHours) * time.Hour
 }
 
 var Config *Settings

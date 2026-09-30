@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"backend-go/internal/middleware"
 	"backend-go/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -11,15 +12,13 @@ import (
 
 func CreateConversation(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetString("user_id")
-
 		// channel 可选；缺省或非法值都会落到 chat
 		var req struct {
 			Channel string `json:"channel"`
 		}
 		_ = c.ShouldBindJSON(&req)
 
-		conv, err := svc.CreateConversation(userID, req.Channel)
+		conv, err := svc.CreateConversation(middleware.ActorFrom(c), req.Channel)
 		if err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
@@ -31,9 +30,7 @@ func CreateConversation(svc *service.ConversationService) gin.HandlerFunc {
 // ListConversations 支持 ?channel=chat|reading|all，缺省只返回 chat。
 func ListConversations(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetString("user_id")
-
-		conversations, err := svc.ListConversations(userID, c.Query("channel"))
+		conversations, err := svc.ListConversations(middleware.ActorFrom(c), c.Query("channel"))
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -64,7 +61,7 @@ func ListConversations(svc *service.ConversationService) gin.HandlerFunc {
 // 消息上附带 cards（由 messages.reading_id 反查），前端刷新后据此还原牌面。
 type ConversationDetail struct {
 	ID        uint                    `json:"id"`
-	UserID    string                  `json:"user_id"`
+	OwnerID   uint                    `json:"owner_id"`
 	Title     string                  `json:"title"`
 	Channel   string                  `json:"channel"`
 	CreatedAt time.Time               `json:"created_at"`
@@ -74,7 +71,6 @@ type ConversationDetail struct {
 
 func GetConversation(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetString("user_id")
 		idStr := c.Param("id")
 		id, err := strconv.ParseUint(idStr, 10, 32)
 		if err != nil {
@@ -82,7 +78,7 @@ func GetConversation(svc *service.ConversationService) gin.HandlerFunc {
 			return
 		}
 
-		conv, err := svc.GetConversation(uint(id), userID)
+		conv, err := svc.GetConversation(uint(id), middleware.ActorFrom(c))
 		if err != nil {
 			c.JSON(404, gin.H{"error": "conversation not found"})
 			return
@@ -90,7 +86,7 @@ func GetConversation(svc *service.ConversationService) gin.HandlerFunc {
 
 		c.JSON(200, ConversationDetail{
 			ID:        conv.ID,
-			UserID:    conv.UserID,
+			OwnerID:   conv.OwnerID,
 			Title:     conv.Title,
 			Channel:   conv.Channel,
 			CreatedAt: conv.CreatedAt,
@@ -102,7 +98,6 @@ func GetConversation(svc *service.ConversationService) gin.HandlerFunc {
 
 func DeleteConversation(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetString("user_id")
 		idStr := c.Param("id")
 		id, err := strconv.ParseUint(idStr, 10, 32)
 		if err != nil {
@@ -110,7 +105,7 @@ func DeleteConversation(svc *service.ConversationService) gin.HandlerFunc {
 			return
 		}
 
-		if err := svc.DeleteConversation(uint(id), userID); err != nil {
+		if err := svc.DeleteConversation(uint(id), middleware.ActorFrom(c)); err != nil {
 			c.JSON(404, gin.H{"error": err.Error()})
 			return
 		}
@@ -120,7 +115,6 @@ func DeleteConversation(svc *service.ConversationService) gin.HandlerFunc {
 
 func UpdateConversationTitle(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetString("user_id")
 		idStr := c.Param("id")
 		id, err := strconv.ParseUint(idStr, 10, 32)
 		if err != nil {
@@ -136,7 +130,7 @@ func UpdateConversationTitle(svc *service.ConversationService) gin.HandlerFunc {
 			return
 		}
 
-		if err := svc.UpdateTitle(uint(id), userID, req.Title); err != nil {
+		if err := svc.UpdateTitle(uint(id), middleware.ActorFrom(c), req.Title); err != nil {
 			c.JSON(404, gin.H{"error": err.Error()})
 			return
 		}
@@ -146,7 +140,6 @@ func UpdateConversationTitle(svc *service.ConversationService) gin.HandlerFunc {
 
 func GetMessages(svc *service.ConversationService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetString("user_id")
 		idStr := c.Param("id")
 		id, err := strconv.ParseUint(idStr, 10, 32)
 		if err != nil {
@@ -159,7 +152,7 @@ func GetMessages(svc *service.ConversationService) gin.HandlerFunc {
 		limit, _ := strconv.Atoi(limitStr)
 		offset, _ := strconv.Atoi(offsetStr)
 
-		messages, err := svc.GetMessages(uint(id), userID, limit, offset)
+		messages, err := svc.GetMessages(uint(id), middleware.ActorFrom(c), limit, offset)
 		if err != nil {
 			c.JSON(404, gin.H{"error": "conversation not found"})
 			return
