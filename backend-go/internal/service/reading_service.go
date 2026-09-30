@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"backend-go/internal/agent"
+	"backend-go/internal/auth"
 	"backend-go/internal/db"
 
 	"github.com/cloudwego/eino/compose"
@@ -105,12 +106,12 @@ func (s *ReadingService) DrawCards(count int) ([]DrawnCard, error) {
 }
 
 // CreateReading 自行抽牌后解读。
-func (s *ReadingService) CreateReading(question, spreadType string, sessionID *string) (*ReadingResult, error) {
+func (s *ReadingService) CreateReading(question, spreadType string, sessionID *string, ownerID uint, conversationID *uint) (*ReadingResult, error) {
 	drawnCards, err := s.DrawCards(cardCount(spreadType))
 	if err != nil {
 		return nil, err
 	}
-	return s.CreateReadingWithCards(question, spreadType, sessionID, drawnCards)
+	return s.CreateReadingWithCards(question, spreadType, sessionID, drawnCards, ownerID, conversationID)
 }
 
 // synthesisMarker 是历史版本把综合解读拼进最后一张牌解读末尾时使用的分隔符。
@@ -126,13 +127,21 @@ type PreparedReading struct {
 }
 
 // PrepareReading 建 readings / reading_cards 行，不调用 LLM。
-func (s *ReadingService) PrepareReading(question, spreadType string, sessionID *string, drawnCards []DrawnCard) (*PreparedReading, error) {
+//
+// ownerID 是必填的归属；conversationID 可空（独立 REST 接口调用时无会话）。
+func (s *ReadingService) PrepareReading(question, spreadType string, sessionID *string, drawnCards []DrawnCard, ownerID uint, conversationID *uint) (*PreparedReading, error) {
 	sid := uuid.New().String()
 	if sessionID != nil && *sessionID != "" {
 		sid = *sessionID
 	}
 
-	reading := db.Reading{SessionID: sid, Question: question, SpreadType: spreadType}
+	reading := db.Reading{
+		OwnerID:        ownerID,
+		ConversationID: conversationID,
+		SessionID:      sid,
+		Question:       question,
+		SpreadType:     spreadType,
+	}
 	if err := s.DB.Create(&reading).Error; err != nil {
 		return nil, err
 	}
@@ -275,8 +284,8 @@ func (s *ReadingService) SaveSynthesis(p *PreparedReading, text string) {
 //
 // 流式占卜（StreamTarotReading）需要先把抽到的牌推给前端、再解读，
 // 若此处再次抽牌，就会出现「推给前端的牌」与「实际解读的牌」不是同一副的错位。
-func (s *ReadingService) CreateReadingWithCards(question, spreadType string, sessionID *string, drawnCards []DrawnCard) (*ReadingResult, error) {
-	p, err := s.PrepareReading(question, spreadType, sessionID, drawnCards)
+func (s *ReadingService) CreateReadingWithCards(question, spreadType string, sessionID *string, drawnCards []DrawnCard, ownerID uint, conversationID *uint) (*ReadingResult, error) {
+	p, err := s.PrepareReading(question, spreadType, sessionID, drawnCards, ownerID, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -286,27 +295,33 @@ func (s *ReadingService) CreateReadingWithCards(question, spreadType string, ses
 		s.SaveCardInterpretation(&p.Cards[i], text)
 	}
 
-	return s.GetReadingByID(p.Reading.ID)
+	return s.reloadReading(p.Reading.ID)
 }
 
 // CreateReadingLangGraph 自行抽牌后走 Eino 图解读（三张牌阵会额外生成综合解读）。
-func (s *ReadingService) CreateReadingLangGraph(question, spreadType string, sessionID, modelName *string) (*ReadingResult, error) {
+func (s *ReadingService) CreateReadingLangGraph(question, spreadType string, sessionID, modelName *string, ownerID uint, conversationID *uint) (*ReadingResult, error) {
 	drawnCards, err := s.DrawCards(cardCount(spreadType))
 	if err != nil {
 		return nil, err
 	}
-	return s.CreateReadingLangGraphWithCards(question, spreadType, sessionID, modelName, drawnCards)
+	return s.CreateReadingLangGraphWithCards(question, spreadType, sessionID, modelName, drawnCards, ownerID, conversationID)
 }
 
 // CreateReadingLangGraphWithCards 用调用方给定的牌走 Eino 图解读。
 // 理由同 CreateReadingWithCards。
-func (s *ReadingService) CreateReadingLangGraphWithCards(question, spreadType string, sessionID, modelName *string, drawnCards []DrawnCard) (*ReadingResult, error) {
+func (s *ReadingService) CreateReadingLangGraphWithCards(question, spreadType string, sessionID, modelName *string, drawnCards []DrawnCard, ownerID uint, conversationID *uint) (*ReadingResult, error) {
 	sid := uuid.New().String()
 	if sessionID != nil && *sessionID != "" {
 		sid = *sessionID
 	}
 
-	reading := db.Reading{SessionID: sid, Question: question, SpreadType: spreadType}
+	reading := db.Reading{
+		OwnerID:        ownerID,
+		ConversationID: conversationID,
+		SessionID:      sid,
+		Question:       question,
+		SpreadType:     spreadType,
+	}
 	s.DB.Create(&reading)
 
 	readingCards := make([]db.ReadingCard, len(drawnCards))
@@ -381,15 +396,29 @@ func (s *ReadingService) CreateReadingLangGraphWithCards(question, spreadType st
 		s.DB.Model(&db.Reading{}).Where("id = ?", reading.ID).Update("synthesis", state.Synthesis)
 	}
 
-	return s.GetReadingByID(reading.ID)
+	return s.reloadReading(reading.ID)
 }
 
-func (s *ReadingService) GetReadingByID(id uint) (*ReadingResult, error) {
+// GetReadingByID 按主键读取占卜记录，带归属校验。
+//
+// 这是本次改造修掉的最严重越权点：旧实现是 s.DB.First(&reading, id)，
+// 完全不校验归属，任何人遍历 ID 就能读到他人占卜全文（IDOR）。
+// 注意前端 GET /readings/:id 正在走这条路径。
+//
+// 非本人记录返回 gorm.ErrRecordNotFound，由 handler 转成 404 —— 不用 403，
+// 否则「该 ID 存在但不属于你」会把主键空间变成存在性预言机。
+func (s *ReadingService) GetReadingByID(id uint, actor auth.Actor) (*ReadingResult, error) {
 	var reading db.Reading
-	if err := s.DB.Preload("Cards").Preload("Cards.Card").First(&reading, id).Error; err != nil {
+	q := actor.VisibleTo(s.DB.Model(&db.Reading{}), "owner_id").Where("id = ?", id)
+	if err := q.Preload("Cards").Preload("Cards.Card").First(&reading).Error; err != nil {
 		return nil, err
 	}
+	return s.assembleReading(&reading), nil
+}
 
+// assembleReading 把已加载的 reading 组装成对外结构。
+// 不做归属校验，调用方必须已经确认过可见性。
+func (s *ReadingService) assembleReading(reading *db.Reading) *ReadingResult {
 	cards := make([]ReadingCardResponse, len(reading.Cards))
 	for i, rc := range reading.Cards {
 		cards[i] = ReadingCardResponse{
@@ -431,5 +460,15 @@ func (s *ReadingService) GetReadingByID(id uint) (*ReadingResult, error) {
 		Synthesis:  synthesis,
 		CreatedAt:  &reading.CreatedAt,
 		Cards:      cards,
-	}, nil
+	}
+}
+
+// reloadReading 重新读取刚写入的 reading（含 Cards 关联）。
+// 仅用于同一次调用内刚创建完的记录，因此不需要归属过滤。
+func (s *ReadingService) reloadReading(id uint) (*ReadingResult, error) {
+	var reading db.Reading
+	if err := s.DB.Preload("Cards").Preload("Cards.Card").First(&reading, id).Error; err != nil {
+		return nil, err
+	}
+	return s.assembleReading(&reading), nil
 }
