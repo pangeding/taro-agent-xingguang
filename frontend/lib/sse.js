@@ -1,4 +1,4 @@
-import { API_BASE, extractError } from './api'
+import { authAwareFetch } from './api'
 
 /**
  * 解析一个 SSE 数据块（以空行分隔）。
@@ -38,20 +38,17 @@ function decodeBlock(block) {
  * @param {(event: string, data: any) => void} opts.onEvent
  *
  * 抛出 AbortError 表示调用方主动取消；其余错误已是可读文案。
+ * 未登录 / 会话失效时 authAwareFetch 会跳转登录页，并抛出 err.handled === true 的错误，
+ * 调用方应直接 return，不要再渲染错误提示。
  */
 export async function streamSSE(path, { method = 'POST', body, signal, onEvent } = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await authAwareFetch(path, {
     method,
-    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     signal,
     body: body === undefined ? undefined : JSON.stringify(body),
   })
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(extractError(text, response.status))
-  }
   if (!response.body) {
     throw new Error('当前环境不支持流式响应')
   }

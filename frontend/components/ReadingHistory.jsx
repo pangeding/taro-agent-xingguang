@@ -87,7 +87,8 @@ export default function ReadingHistory({ refreshKey = 0, onSelect, disabled = fa
           .slice(0, MAX_READINGS),
       )
     } catch (err) {
-      setError(err.message || '加载占卜历史失败')
+      // 401/403 时 apiFetch 已跳转登录页，没必要再渲染一条马上会消失的错误
+      if (!err.handled) setError(err.message || '加载占卜历史失败')
     } finally {
       setIsLoading(false)
     }
@@ -115,7 +116,7 @@ export default function ReadingHistory({ refreshKey = 0, onSelect, disabled = fa
       await apiFetch(`/conversations/${reading.conversationId}`, { method: 'DELETE' })
       setReadings((prev) => prev.filter((r) => r.conversationId !== reading.conversationId))
     } catch (err) {
-      setError(err.message || '删除失败，请稍后重试')
+      if (!err.handled) setError(err.message || '删除失败，请稍后重试')
     }
   }
 

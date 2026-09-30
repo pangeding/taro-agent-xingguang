@@ -5,6 +5,7 @@ import { Sparkles, Clock, Star, HelpCircle, RotateCcw, Loader2 } from 'lucide-re
 import TarotCard from '../components/TarotCard'
 import ReadingHistory from '../components/ReadingHistory'
 import Markdown from '../components/Markdown'
+import AuthGate from '../components/AuthGate'
 import { apiFetch } from '../lib/api'
 import { streamSSE } from '../lib/sse'
 
@@ -39,7 +40,8 @@ const FEATURES = [
   },
 ]
 
-export default function Home() {
+// 页面主体。AuthGate 保证只有已登录用户才会走到这里。
+function HomeContent() {
   const [ready, setReady] = useState(false)
   const [conversationId, setConversationId] = useState(null)
 
@@ -59,19 +61,20 @@ export default function Home() {
   const isBusy = phase === 'drawing' || phase === 'streaming'
   const hasResult = Boolean(reading) || liveCards.length > 0 || isBusy || Boolean(streamText)
 
-  // 初始化：建立用户身份，并复用最近一个「占卜」频道会话
+  // 初始化：复用最近一个「占卜」频道会话。
+  // 用户身份由 AuthGate 保证（已登录才会渲染本页面），不再需要 /user/init。
   useEffect(() => {
     let cancelled = false
 
     ;(async () => {
       try {
-        await apiFetch('/user/init', { method: 'POST' })
         const list = await apiFetch('/conversations?channel=reading')
         if (!cancelled && Array.isArray(list) && list.length > 0) {
           setConversationId(list[0].id)
         }
       } catch (err) {
-        if (!cancelled) {
+        // 401/403 时 apiFetch 已跳转，不要再渲染错误提示
+        if (!cancelled && !err.handled) {
           setError(err.message || '无法连接到服务，请确认后端已启动后刷新页面')
         }
       } finally {
@@ -193,7 +196,7 @@ export default function Home() {
         setPhase('idle')
         return
       }
-      setError(err.message || '占卜失败，请稍后重试')
+      if (!err.handled) setError(err.message || '占卜失败，请稍后重试')
       setPhase('idle')
     }
   }
@@ -231,7 +234,7 @@ export default function Home() {
         if (full.synthesis) setStreamText(full.synthesis)
       }
     } catch (err) {
-      setError(`加载该占卜记录失败：${err.message}`)
+      if (!err.handled) setError(`加载该占卜记录失败：${err.message}`)
     }
   }
 
@@ -486,5 +489,13 @@ export default function Home() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function Home() {
+  return (
+    <AuthGate>
+      <HomeContent />
+    </AuthGate>
   )
 }
