@@ -12,3 +12,9 @@ node_modules/
 
 # go output
 backend-go/server
+
+# 数据库迁移前置备份
+backend-go/backup/
+
+# Go 构建缓存（沙箱下 GOCACHE 必须在工作区内）
+.gocache/
